@@ -10,16 +10,26 @@ export default function FieldMonitoring() {
     setCameraStarted(true);
     setStatus('Active');
 
+
+
+
+    
+    // Here you would initialize your camera feed
+
+
+
   };
 
   return (
     <div className="min-h-screen bg-gray-50 p-8">
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
-  
+
+        {/* Left Section - Camera Feed */}
         <div className="lg:col-span-2">
           <h2 className="text-lg font-semibold mb-4">Camera Feed</h2>
           
-    
+          
+          {/* Camera Display */}
           <div className="bg-gray-900 rounded-lg aspect-video flex items-center justify-center relative">
             {!cameraStarted ? (
               <div className="text-center">
