@@ -6,6 +6,7 @@ import FieldMonitoring from "./components/FieldMonitoring";
 import Detection from "./components/Detection";
 import AlarmLog from "./components/AlarmLog";
 import Fields from "./components/Fields";
+import Settings from "./components/Settings";
 import Register from "./components/Register";
 import Login from "./components/Login";
 import "./App.css";
@@ -116,6 +117,16 @@ function App() {
             <ProtectedRoute>
               <MainLayout>
                 <Fields />
+              </MainLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <ProtectedRoute>
+              <MainLayout>
+                <Settings />
               </MainLayout>
             </ProtectedRoute>
           }

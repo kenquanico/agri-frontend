@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LogOut } from "lucide-react";
+import { LogOut, Settings as SettingsIcon } from "lucide-react";
 import Logo from "../assets/AV-logo.PNG";
 import SidebarIcon from "../assets/side-bar.svg";
 import Fields from "../assets/fields.svg";
@@ -30,7 +30,7 @@ export default function Sidebar({ isCollapsed, onToggle }) {
   return (
     <>
       <aside
-        className={`bg-white fixed inset-y-0 left-0 border-r border-gray-200 transition-all duration-300 ease-in-out z-40 ${
+        className={`bg-white fixed inset-y-0 left-0 border-r border-gray-200 transition-all duration-300 ease-in-out z-40 flex flex-col ${
           isCollapsed ? "w-20" : "w-64"
         }`}
       >
@@ -148,6 +148,23 @@ export default function Sidebar({ isCollapsed, onToggle }) {
               Fields
             </span>
           </NavLink>
+
+          <NavLink
+            to="/settings"
+            className={({ isActive }) => `${linkClass} ${isActive ? activeClass : ""}`}
+            title={isCollapsed ? "Settings" : ""}
+          >
+            <div className="flex items-center justify-center w-5 flex-shrink-0">
+              <SettingsIcon className="h-5 w-5" />
+            </div>
+            <span
+              className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${
+                isCollapsed ? "w-0 opacity-0 ml-0" : "w-auto opacity-100 ml-3"
+              }`}
+            >
+              Settings
+            </span>
+          </NavLink>
         </nav>
 
         {/* Logout Button */}
@@ -173,7 +190,7 @@ export default function Sidebar({ isCollapsed, onToggle }) {
 
       {/* Logout Confirmation Modal */}
       {showLogoutModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-lg shadow-lg w-80 text-center">
             <h2 className="text-lg font-semibold mb-4">Confirm Logout</h2>
             <p className="mb-6">Are you sure you want to logout?</p>
