@@ -91,7 +91,7 @@ const handleSubmit = async (e) => {
 
     console.log("API Response:", data, "Status:", status); // log always
 
-    if (status === 200) {
+    if (status === 201) {
       console.log("Form submitted:", formData);
       alert("Registration successful!");
 
@@ -107,14 +107,14 @@ const handleSubmit = async (e) => {
       });
 
       setErrors({});
-      return { success: true, data };
+      return { success: true, data: response.data };
     } else {
       alert("Registration failed");
       return { success: false, error: 'Registration failed' };
     }
 
   } catch (error) {
-    console.error("API Error:", error);
+    console.error(error.response?.data || error.message);
     alert(error.response?.data?.message || 'Register failed');
     return { success: false, error: error.response?.data?.message || 'Register failed' };
   }

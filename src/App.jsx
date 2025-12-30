@@ -28,7 +28,10 @@ function App() {
   // Main App Layout (with Sidebar)
   const MainLayout = ({ children }) => (
     <div className="bg-white min-h-screen">
-      <Sidebar onToggle={setIsSidebarCollapsed} />
+      <Sidebar 
+        isCollapsed={isSidebarCollapsed} 
+        onToggle={setIsSidebarCollapsed} 
+      />
       <main
         className={`transition-all duration-300 ease-in-out ${
           isSidebarCollapsed ? "ml-20" : "ml-64"

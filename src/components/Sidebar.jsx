@@ -9,15 +9,12 @@ import AlarmLog from "../assets/alarm-log.svg";
 import FieldMonitoring from "../assets/monitoring.svg";
 import Detection from "../assets/detection.svg";
 
-export default function Sidebar({ onToggle }) {
+export default function Sidebar({ isCollapsed, onToggle }) {
   const navigate = useNavigate();
-  const [isCollapsed, setIsCollapsed] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   const handleToggle = () => {
-    const newState = !isCollapsed;
-    setIsCollapsed(newState);
-    if (onToggle) onToggle(newState);
+    onToggle(!isCollapsed);
   };
 
   const handleLogout = () => {
@@ -34,21 +31,23 @@ export default function Sidebar({ onToggle }) {
     <>
       <aside
         className={`bg-white fixed inset-y-0 left-0 border-r border-gray-200 transition-all duration-300 ease-in-out z-40 ${
-          isCollapsed ? "w-21" : "w-64"
+          isCollapsed ? "w-20" : "w-64"
         }`}
       >
         <div
-          className={`flex items-center mr-5 ml-5 p-4 transition-all duration-300 ${
-            isCollapsed ? "justify-center" : "justify-between"
+          className={`flex items-center p-4 transition-all duration-300 ${
+            isCollapsed ? "justify-center px-2" : "justify-between px-4"
           }`}
         >
-          <img
-            src={Logo}
-            className={`h-8 w-auto transition-all duration-0 ${
-              isCollapsed ? "opacity-0 w-0" : "opacity-100"
-            }`}
-            alt="Logo"
-          />
+          <div className={`overflow-hidden transition-all duration-300 ${
+            isCollapsed ? "w-0 opacity-0" : "w-auto opacity-100"
+          }`}>
+            <img
+              src={Logo}
+              className="h-8 w-auto"
+              alt="Logo"
+            />
+          </div>
           <button
             onClick={handleToggle}
             className="h-6 w-6 flex-shrink-0 cursor-pointer transition-transform duration-300 hover:scale-110 active:scale-95"
@@ -56,7 +55,7 @@ export default function Sidebar({ onToggle }) {
           >
             <img
               src={SidebarIcon}
-              className={`h-full w-full transition-transform duration-500 ${
+              className={`h-full w-full transition-transform duration-300 ${
                 isCollapsed ? "rotate-180" : "rotate-0"
               }`}
               alt="Toggle"
@@ -64,18 +63,18 @@ export default function Sidebar({ onToggle }) {
           </button>
         </div>
 
-        <nav className="mt-5 px-4 space-y-2 flex-1">
+        <nav className="mt-5 px-2 space-y-2 flex-1">
           <NavLink
             to="/"
             className={({ isActive }) => `${linkClass} ${isActive ? activeClass : ""}`}
             title={isCollapsed ? "Dashboard" : ""}
           >
-            <div className="flex items-center justify-center w-5">
-              <img src={Dashboard} className="h-5 w-5 flex-shrink-0" alt="Dashboard" />
+            <div className="flex items-center justify-center w-5 flex-shrink-0">
+              <img src={Dashboard} className="h-5 w-5" alt="Dashboard" />
             </div>
             <span
-              className={`ml-3 whitespace-nowrap transition-all duration-300 ${
-                isCollapsed ? "opacity-0 w-0 ml-0" : "opacity-100"
+              className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${
+                isCollapsed ? "w-0 opacity-0 ml-0" : "w-auto opacity-100 ml-3"
               }`}
             >
               Dashboard
@@ -87,12 +86,12 @@ export default function Sidebar({ onToggle }) {
             className={({ isActive }) => `${linkClass} ${isActive ? activeClass : ""}`}
             title={isCollapsed ? "Field Monitoring" : ""}
           >
-            <div className="flex items-center justify-center w-5">
-              <img src={FieldMonitoring} className="h-5 w-5 flex-shrink-0" alt="Field Monitoring" />
+            <div className="flex items-center justify-center w-5 flex-shrink-0">
+              <img src={FieldMonitoring} className="h-5 w-5" alt="Field Monitoring" />
             </div>
             <span
-              className={`ml-3 whitespace-nowrap transition-all duration-300 ${
-                isCollapsed ? "opacity-0 w-0 ml-0" : "opacity-100"
+              className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${
+                isCollapsed ? "w-0 opacity-0 ml-0" : "w-auto opacity-100 ml-3"
               }`}
             >
               Field Monitoring
@@ -104,12 +103,12 @@ export default function Sidebar({ onToggle }) {
             className={({ isActive }) => `${linkClass} ${isActive ? activeClass : ""}`}
             title={isCollapsed ? "Detection" : ""}
           >
-            <div className="flex items-center justify-center w-5">
-              <img src={Detection} className="h-5 w-5 flex-shrink-0" alt="Detection" />
+            <div className="flex items-center justify-center w-5 flex-shrink-0">
+              <img src={Detection} className="h-5 w-5" alt="Detection" />
             </div>
             <span
-              className={`ml-3 whitespace-nowrap transition-all duration-300 ${
-                isCollapsed ? "opacity-0 w-0 ml-0" : "opacity-100"
+              className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${
+                isCollapsed ? "w-0 opacity-0 ml-0" : "w-auto opacity-100 ml-3"
               }`}
             >
               Detection
@@ -121,12 +120,12 @@ export default function Sidebar({ onToggle }) {
             className={({ isActive }) => `${linkClass} ${isActive ? activeClass : ""}`}
             title={isCollapsed ? "Alarm Log" : ""}
           >
-            <div className="flex items-center justify-center w-5">
-              <img src={AlarmLog} className="h-5 w-5 flex-shrink-0" alt="Alarm Log" />
+            <div className="flex items-center justify-center w-5 flex-shrink-0">
+              <img src={AlarmLog} className="h-5 w-5" alt="Alarm Log" />
             </div>
             <span
-              className={`ml-3 whitespace-nowrap transition-all duration-300 ${
-                isCollapsed ? "opacity-0 w-0 ml-0" : "opacity-100"
+              className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${
+                isCollapsed ? "w-0 opacity-0 ml-0" : "w-auto opacity-100 ml-3"
               }`}
             >
               Alarm Log
@@ -138,12 +137,12 @@ export default function Sidebar({ onToggle }) {
             className={({ isActive }) => `${linkClass} ${isActive ? activeClass : ""}`}
             title={isCollapsed ? "Fields" : ""}
           >
-            <div className="flex items-center justify-center w-5">
-              <img src={Fields} className="h-5 w-5 flex-shrink-0" alt="Fields" />
+            <div className="flex items-center justify-center w-5 flex-shrink-0">
+              <img src={Fields} className="h-5 w-5" alt="Fields" />
             </div>
             <span
-              className={`ml-3 whitespace-nowrap transition-all duration-300 ${
-                isCollapsed ? "opacity-0 w-0 ml-0" : "opacity-100"
+              className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${
+                isCollapsed ? "w-0 opacity-0 ml-0" : "w-auto opacity-100 ml-3"
               }`}
             >
               Fields
@@ -152,18 +151,18 @@ export default function Sidebar({ onToggle }) {
         </nav>
 
         {/* Logout Button */}
-        <div className="px-4 pb-4">
+        <div className="px-2 pb-4">
           <button
             onClick={() => setShowLogoutModal(true)}
-            className={`${linkClass} text-red-600 hover:bg-red-50 w-full`}
+            className={`${linkClass} text-red-600 hover:bg-red-50 w-full justify-start`}
             title={isCollapsed ? "Logout" : ""}
           >
-            <div className="flex items-center justify-center w-5">
-              <LogOut className="h-5 w-5 flex-shrink-0" />
+            <div className="flex items-center justify-center w-5 flex-shrink-0">
+              <LogOut className="h-5 w-5" />
             </div>
             <span
-              className={`ml-3 whitespace-nowrap transition-all duration-300 ${
-                isCollapsed ? "opacity-0 w-0 ml-0" : "opacity-100"
+              className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${
+                isCollapsed ? "w-0 opacity-0 ml-0" : "w-auto opacity-100 ml-3"
               }`}
             >
               Logout
