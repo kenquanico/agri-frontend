@@ -76,50 +76,50 @@ export default function Register() {
     return newErrors;
   };
 
-const handleSubmit = async (e) => {
-  e.preventDefault();
-  
-  const newErrors = validate();
-  
-  if (Object.keys(newErrors).length > 0) {
-    setErrors(newErrors);
-    return;
-  }
+  const handleSubmit = async (e) => {
+    e.preventDefault();
 
-  try {
-    const { data, status } = await api.post('/api/register', formData);
+    const newErrors = validate();
 
-    console.log("API Response:", data, "Status:", status); // log always
-
-    if (status === 201) {
-      console.log("Form submitted:", formData);
-      alert("Registration successful!");
-
-      // Reset form
-      setFormData({
-        firstName: "",
-        lastName: "",
-        email: "",
-        password: "",
-        confirmPassword: "",
-        role: "",
-        idNumber: ""
-      });
-
-      setErrors({});
-      return { success: true, data: response.data };
-    } else {
-      alert("Registration failed");
-      return { success: false, error: 'Registration failed' };
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
     }
 
-  } catch (error) {
-    console.error(error.response?.data || error.message);
-    alert(error.response?.data?.message || 'Register failed');
-    return { success: false, error: error.response?.data?.message || 'Register failed' };
-  }
-};
+    try {
+      // Destructure data and status from Axios response
+      const { data, status } = await api.post('/api/register', formData);
 
+      console.log("API Response:", data, "Status:", status); // always log
+
+      if (status === 201) {
+        console.log("Form submitted:", formData);
+        alert("Registration successful!");
+
+        // Reset form
+        setFormData({
+          firstName: "",
+          lastName: "",
+          email: "",
+          password: "",
+          confirmPassword: "",
+          role: "",
+          idNumber: ""
+        });
+
+        setErrors({});
+        return { success: true, data }; // use data, not response.data
+      } else {
+        alert("Registration failed");
+        return { success: false, error: 'Registration failed' };
+      }
+
+    } catch (error) {
+      console.error(error.response?.data || error.message);
+      alert(error.response?.data?.message || 'Register failed');
+      return { success: false, error: error.response?.data?.message || 'Register failed' };
+    }
+  };
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl p-6 md:p-8">

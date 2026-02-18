@@ -1,5 +1,7 @@
-import { useState, useEffect } from "react";
+// src/App.jsx
+import { useState } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider, useAuth } from "./components/context/AuthContext";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./components/Dashboard";
 import FieldMonitoring from "./components/FieldMonitoring";
@@ -11,135 +13,58 @@ import Register from "./components/Register";
 import Login from "./components/Login";
 import "./App.css";
 
-function App() {
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-
-  // Check localStorage for token on mount
-  useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (token) setIsAuthenticated(true);
-  }, []);
-
-  // Protected Route Component
-  const ProtectedRoute = ({ children }) => {
-    return isAuthenticated ? children : <Navigate to="/login" replace />;
-  };
-
-  // Main App Layout (with Sidebar)
-  const MainLayout = ({ children }) => (
+const MainLayout = ({ children, isCollapsed, onToggle }) => (
     <div className="bg-white min-h-screen">
-      <Sidebar 
-        isCollapsed={isSidebarCollapsed} 
-        onToggle={setIsSidebarCollapsed} 
-      />
-      <main
-        className={`transition-all duration-300 ease-in-out ${
-          isSidebarCollapsed ? "ml-20" : "ml-64"
-        }`}
-      >
-        {children}
-      </main>
+        <Sidebar isCollapsed={isCollapsed} onToggle={onToggle} />
+        <main className={`transition-all duration-300 ease-in-out ${isCollapsed ? "ml-20" : "ml-64"}`}>
+            {children}
+        </main>
     </div>
-  );
+);
 
-  // Handle login from Login component
-  const handleLogin = (token) => {
-    localStorage.setItem("token", token);
-    setIsAuthenticated(true);
-  };
+// ✅ Redirects to /login if not authenticated
+const ProtectedRoute = ({ children }) => {
+    const { isAuthenticated } = useAuth();
+    return isAuthenticated ? children : <Navigate to="/login" replace />;
+};
 
-  return (
-    <Router>
-      <Routes>
-        {/* Public Routes */}
-        <Route
-          path="/register"
-          element={
-            isAuthenticated ? <Navigate to="/" replace /> : <Register />
-          }
-        />
-        <Route
-          path="/login"
-          element={
-            isAuthenticated ? (
-              <Navigate to="/" replace />
-            ) : (
-              <Login onLogin={handleLogin} />
-            )
-          }
-        />
+function AppRoutes() {
+    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
-        {/* Protected Routes */}
-        <Route
-          path="/"
-          element={
-            <ProtectedRoute>
-              <MainLayout>
-                <Dashboard />
-              </MainLayout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/field-monitoring"
-          element={
-            <ProtectedRoute>
-              <MainLayout>
-                <FieldMonitoring />
-              </MainLayout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/detection"
-          element={
-            <ProtectedRoute>
-              <MainLayout>
-                <Detection />
-              </MainLayout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/alarm-log"
-          element={
-            <ProtectedRoute>
-              <MainLayout>
-                <AlarmLog />
-              </MainLayout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/fields"
-          element={
-            <ProtectedRoute>
-              <MainLayout>
-                <Fields />
-              </MainLayout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/settings"
-          element={
-            <ProtectedRoute>
-              <MainLayout>
-                <Settings />
-              </MainLayout>
-            </ProtectedRoute>
-          }
-        />
+    const withLayout = (Component) => (
+        <ProtectedRoute>
+            <MainLayout isCollapsed={isSidebarCollapsed} onToggle={setIsSidebarCollapsed}>
+                <Component />
+            </MainLayout>
+        </ProtectedRoute>
+    );
 
-        {/* Redirect any unknown route */}
-        <Route
-          path="*"
-          element={<Navigate to={isAuthenticated ? "/" : "/login"} replace />}
-        />
-      </Routes>
-    </Router>
-  );
+    return (
+        <Routes>
+            <Route path="/" element={<Navigate to="/login" replace />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+
+            <Route path="/dashboard" element={withLayout(Dashboard)} />
+            <Route path="/field-monitoring" element={withLayout(FieldMonitoring)} />
+            <Route path="/detection" element={withLayout(Detection)} />
+            <Route path="/alarm-log" element={withLayout(AlarmLog)} />
+            <Route path="/fields" element={withLayout(Fields)} />
+            <Route path="/settings" element={withLayout(Settings)} />
+
+            <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+    );
+}
+
+function App() {
+    return (
+        <Router>
+            <AuthProvider>
+                <AppRoutes />
+            </AuthProvider>
+        </Router>
+    );
 }
 
 export default App;
