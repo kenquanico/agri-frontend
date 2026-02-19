@@ -13,8 +13,7 @@ export default function FieldMonitoring() {
   const [showLog, setShowLog]               = useState(false)   // sidebar in fullscreen
   const [controlsVisible, setControlsVisible] = useState(true)
 
-  // const MOBILE_CAMERA_URL = 'http://192.168.1.169:8080/video'
-  const MOBILE_CAMERA_URL = 'http://10.253.40.84:8080/video'
+  const MOBILE_CAMERA_URL = 'http://10.148.192.111:8080/video'
 
   const imgRef           = useRef(null)
   const intervalRef      = useRef(null)

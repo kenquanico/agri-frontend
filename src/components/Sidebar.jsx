@@ -22,7 +22,7 @@ export default function Sidebar({ isCollapsed, onToggle }) {
   };
 
   const navItems = [
-    { to: "/", icon: Dashboard, label: "Dashboard" },
+    { to: "/dashboard", icon: Dashboard, label: "Dashboard" },
     { to: "/field-monitoring", icon: FieldMonitoring, label: "Field Monitoring" },
     { to: "/detection", icon: Detection, label: "Detection" },
     { to: "/alarm-log", icon: AlarmLog, label: "Alarm Log" },
