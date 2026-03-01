@@ -2,7 +2,6 @@ import { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { LogOut, Settings as SettingsIcon, X } from "lucide-react";
 import Logo from "../assets/AV-logo.PNG";
-import SidebarIcon from "../assets/side-bar.svg";
 import Fields from "../assets/fields.svg";
 import Dashboard from "../assets/dashboard.svg";
 import AlarmLog from "../assets/alarm-log.svg";
@@ -13,8 +12,6 @@ export default function Sidebar({ isCollapsed, onToggle }) {
   const navigate = useNavigate();
   const [showLogoutModal, setShowLogoutModal] = useState(false);
 
-  const handleToggle = () => onToggle(!isCollapsed);
-
   const handleLogout = () => {
     localStorage.removeItem("token");
     navigate("/login");
@@ -22,11 +19,11 @@ export default function Sidebar({ isCollapsed, onToggle }) {
   };
 
   const navItems = [
-    { to: "/dashboard", icon: Dashboard, label: "Dashboard" },
+    { to: "/dashboard",        icon: Dashboard,       label: "Dashboard" },
     { to: "/field-monitoring", icon: FieldMonitoring, label: "Field Monitoring" },
-    { to: "/detection", icon: Detection, label: "Detection" },
-    { to: "/alarm-log", icon: AlarmLog, label: "Alarm Log" },
-    { to: "/fields", icon: Fields, label: "Fields" },
+    { to: "/detection",        icon: Detection,        label: "Detection" },
+    { to: "/alarm-log",        icon: AlarmLog,         label: "Alarm Log" },
+    { to: "/fields",           icon: Fields,           label: "Fields" },
   ];
 
   return (
@@ -36,23 +33,18 @@ export default function Sidebar({ isCollapsed, onToggle }) {
                 isCollapsed ? "w-[72px]" : "w-60"
             }`}
         >
-          {/* Logo Row */}
-          <div className={`flex items-center h-16 px-4 border-b border-gray-100 ${isCollapsed ? "justify-center" : "justify-between"}`}>
-            <div className={`overflow-hidden transition-all duration-300 ${isCollapsed ? "w-0 opacity-0" : "w-auto opacity-100"}`}>
-              <img src={Logo} className="h-7 w-auto" alt="Logo" />
+          {/* Logo Row — no toggle button, that lives in Navbar now */}
+          <div className="flex items-center h-14 px-3 border-b border-gray-100">
+            <div className="flex items-center gap-3 px-3">
+              <div className="flex items-center justify-center w-5 flex-shrink-0">
+                <img src={Logo} className="h-[22px] w-[22px] object-contain" alt="Logo" />
+              </div>
+              <span className={`whitespace-nowrap overflow-hidden transition-all duration-300 font-bold text-gray-800 text-sm ${isCollapsed ? "w-0 opacity-0" : "w-auto opacity-100"}`}>
+              AgriVision
+            </span>
             </div>
-            <button
-                onClick={handleToggle}
-                className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors flex-shrink-0"
-                aria-label="Toggle sidebar"
-            >
-              <img
-                  src={SidebarIcon}
-                  className={`h-4 w-4 transition-transform duration-300 ${isCollapsed ? "rotate-180" : "rotate-0"}`}
-                  alt="Toggle"
-              />
-            </button>
           </div>
+
 
           {/* Nav */}
           <nav className="flex-1 px-3 py-4 space-y-0.5">
@@ -72,7 +64,11 @@ export default function Sidebar({ isCollapsed, onToggle }) {
                   {({ isActive }) => (
                       <>
                         <div className="flex items-center justify-center w-5 flex-shrink-0">
-                          <img src={Icon} className={`h-5 w-5 transition-opacity ${isActive ? "opacity-100" : "opacity-60 group-hover:opacity-80"}`} alt={label} />
+                          <img
+                              src={Icon}
+                              className={`h-[22px] w-[22px] transition-opacity ${isActive ? "opacity-100" : "opacity-60 group-hover:opacity-80"}`}
+                              alt={label}
+                          />
                         </div>
                         <span className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${isCollapsed ? "w-0 opacity-0" : "w-auto opacity-100"}`}>
                     {label}
@@ -98,7 +94,10 @@ export default function Sidebar({ isCollapsed, onToggle }) {
               {({ isActive }) => (
                   <>
                     <div className="flex items-center justify-center w-5 flex-shrink-0">
-                      <SettingsIcon className={`h-5 w-5 transition-opacity ${isActive ? "opacity-100 text-green-700" : "opacity-60 group-hover:opacity-80"}`} />
+                      <SettingsIcon
+                          size={22}
+                          className={`transition-opacity ${isActive ? "opacity-100 text-green-700" : "opacity-60 group-hover:opacity-80"}`}
+                      />
                     </div>
                     <span className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${isCollapsed ? "w-0 opacity-0" : "w-auto opacity-100"}`}>
                   Settings
@@ -119,7 +118,7 @@ export default function Sidebar({ isCollapsed, onToggle }) {
                 className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors w-full"
             >
               <div className="flex items-center justify-center w-5 flex-shrink-0">
-                <LogOut className="h-4 w-4" />
+                <LogOut size={18} />
               </div>
               <span className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${isCollapsed ? "w-0 opacity-0" : "w-auto opacity-100"}`}>
               Logout

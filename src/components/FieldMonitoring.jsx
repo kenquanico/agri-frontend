@@ -1,21 +1,75 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import api from '../api/api'
 import { useDroneWebRTC } from '../api/useDroneWebRTC'
-import { ChevronDown, MapPin, Layers, X } from 'lucide-react'
+import { ChevronDown, MapPin, Layers, X, Wifi, Smartphone, Radio, Settings } from 'lucide-react'
 
-// ─── Config ────────────────────────────────────────────────────────────────
-const WHEP_URL = 'http://192.168.1.97:8889/drone/whep'
-const PHONE_STREAM_URL = '/phone-stream/video'
-const PHONE_STREAM_DISPLAY = '192.168.1.169:8080'
+// ─── Helpers ───────────────────────────────────────────────────────────────
+const loadDevices = () => {
+  try { return JSON.parse(localStorage.getItem('cameraDevices') || '[]') } catch { return [] }
+}
+
+const getDeviceStreamUrl = (device) => {
+  if (!device) return ''
+  if (device.type === 'drone') return device.ip
+  return `http://${device.ip}${device.path || '/video'}`
+}
+
+const DEVICE_TYPE_STYLES = {
+  phone:   { badge: 'bg-blue-50 text-blue-700 border-blue-100',    iconBg: 'bg-blue-100 text-blue-600'   },
+  drone:   { badge: 'bg-green-50 text-green-700 border-green-100', iconBg: 'bg-green-100 text-green-600' },
+  generic: { badge: 'bg-gray-50 text-gray-600 border-gray-200',    iconBg: 'bg-gray-100 text-gray-500'   },
+}
+
+const DeviceIcon = ({ type, size = 14 }) => {
+  if (type === 'drone')  return <Radio size={size} />
+  if (type === 'phone')  return <Smartphone size={size} />
+  return <Wifi size={size} />
+}
+
+// ─── Per-class color palette ────────────────────────────────────────────────
+// Each detected class gets a consistent, distinct color across boxes and log entries.
+const CLASS_COLORS = {}
+const COLOR_PALETTE = [
+  { stroke: '#22c55e', fill: 'rgba(34,197,94,0.12)',   label: 'rgba(34,197,94,0.95)'   },  // green
+  { stroke: '#ef4444', fill: 'rgba(239,68,68,0.12)',   label: 'rgba(239,68,68,0.95)'   },  // red
+  { stroke: '#3b82f6', fill: 'rgba(59,130,246,0.12)',  label: 'rgba(59,130,246,0.95)'  },  // blue
+  { stroke: '#f59e0b', fill: 'rgba(245,158,11,0.12)',  label: 'rgba(245,158,11,0.95)'  },  // amber
+  { stroke: '#a855f7', fill: 'rgba(168,85,247,0.12)',  label: 'rgba(168,85,247,0.95)'  },  // purple
+  { stroke: '#06b6d4', fill: 'rgba(6,182,212,0.12)',   label: 'rgba(6,182,212,0.95)'   },  // cyan
+  { stroke: '#f97316', fill: 'rgba(249,115,22,0.12)',  label: 'rgba(249,115,22,0.95)'  },  // orange
+  { stroke: '#ec4899', fill: 'rgba(236,72,153,0.12)',  label: 'rgba(236,72,153,0.95)'  },  // pink
+]
+let _colorIndex = 0
+const getClassColor = (className) => {
+  const key = (className || 'Unknown').toLowerCase()
+  if (!CLASS_COLORS[key]) {
+    CLASS_COLORS[key] = COLOR_PALETTE[_colorIndex % COLOR_PALETTE.length]
+    _colorIndex++
+  }
+  return CLASS_COLORS[key]
+}
 
 export default function FieldMonitoring () {
+  // ── Device list (from Settings) ────────────────────────────────────────
+  const [devices, setDevices] = useState(loadDevices)
+  const [selectedDevice, setSelectedDevice] = useState(null)
+
+  useEffect(() => {
+    const refresh = () => setDevices(loadDevices())
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [])
+
+  const streamUrl = selectedDevice ? getDeviceStreamUrl(selectedDevice) : ''
+  const whepUrl   = selectedDevice?.type === 'drone' ? streamUrl : ''
+
   const {
     remoteStream,
     connectionState,
     error: webrtcError,
     connect:    connectDrone,
     disconnect: disconnectDrone,
-  } = useDroneWebRTC({ whepUrl: WHEP_URL })
+  } = useDroneWebRTC({ whepUrl })
 
   // ── Field state ────────────────────────────────────────────────────────
   const [fields,            setFields]            = useState([])
@@ -26,7 +80,6 @@ export default function FieldMonitoring () {
 
   // ── UI state ───────────────────────────────────────────────────────────
   const [showSourceModal,  setShowSourceModal]  = useState(false)
-  const [cameraSource,     setCameraSource]     = useState(null)
   const [cameraStarted,    setCameraStarted]    = useState(false)
   const [countingActive,   setCountingActive]   = useState(false)
   const [boxes,            setBoxes]            = useState([])
@@ -37,6 +90,8 @@ export default function FieldMonitoring () {
   const [showLog,          setShowLog]          = useState(false)
   const [controlsVisible,  setControlsVisible]  = useState(true)
   const [phoneImgError,    setPhoneImgError]    = useState(false)
+  // Tracks unique classes seen for the color legend
+  const [classLegend,      setClassLegend]      = useState({})
 
   const videoRef         = useRef(null)
   const phoneImgRef      = useRef(null)
@@ -46,6 +101,8 @@ export default function FieldMonitoring () {
   const containerRef     = useRef(null)
   const fullscreenRef    = useRef(null)
   const hideTimerRef     = useRef(null)
+
+  const isPhoneDevice = selectedDevice?.type !== 'drone'
 
   // ── Fetch fields on mount ───────────────────────────────────────────────
   useEffect(() => {
@@ -63,7 +120,6 @@ export default function FieldMonitoring () {
     fetchFields()
   }, [])
 
-  // ── Close dropdown on outside click ────────────────────────────────────
   useEffect(() => {
     const handler = (e) => {
       if (fieldDropdownRef.current && !fieldDropdownRef.current.contains(e.target)) {
@@ -74,28 +130,33 @@ export default function FieldMonitoring () {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  // ── Pipe WebRTC stream into <video> ────────────────────────────────────
   useEffect(() => {
     if (videoRef.current && remoteStream) {
       videoRef.current.srcObject = remoteStream
     }
   }, [remoteStream])
 
-  const handleMountCamera = () => setShowSourceModal(true)
+  const handleConnectDevice = () => {
+    if (devices.length === 0) return
+    setShowSourceModal(true)
+  }
 
-  const handleSelectSource = (source) => {
+  const handleSelectDevice = (device) => {
     setShowSourceModal(false)
-    setCameraSource(source)
+    setSelectedDevice(device)
     setCameraStarted(true)
     setPhoneImgError(false)
-    if (source === 'drone') connectDrone()
+    if (device.type === 'drone') {
+      setTimeout(() => connectDrone(), 50)
+    }
   }
 
   const handleDisconnect = () => {
     setCameraStarted(false)
     setCountingActive(false)
-    setCameraSource(null)
+    setSelectedDevice(null)
     setBoxes([])
+    setClassLegend({})
     setPhoneImgError(false)
     disconnectDrone()
     if (videoRef.current) {
@@ -111,13 +172,13 @@ export default function FieldMonitoring () {
   }, [cameraStarted, countingActive])
 
   useEffect(() => {
-    const el = cameraSource === 'phone' ? phoneImgRef.current : videoRef.current
+    const el = isPhoneDevice ? phoneImgRef.current : videoRef.current
     if (!el) return
     const redraw = () => drawBoxes()
     el.addEventListener('resize', redraw)
     window.addEventListener('resize', redraw)
     return () => { el.removeEventListener('resize', redraw); window.removeEventListener('resize', redraw) }
-  }, [cameraStarted, cameraSource])
+  }, [cameraStarted, isPhoneDevice])
 
   useEffect(() => { drawBoxes() }, [boxes])
 
@@ -137,13 +198,16 @@ export default function FieldMonitoring () {
     hideTimerRef.current = setTimeout(() => setControlsVisible(false), 3500)
   }, [])
 
+  // ─── Enhanced drawBoxes: per-class colors, index badges, styled label pills ──
   const drawBoxes = () => {
-    const sourceEl = cameraSource === 'phone' ? phoneImgRef.current : videoRef.current
+    const sourceEl = isPhoneDevice ? phoneImgRef.current : videoRef.current
     const canvas   = canvasRef.current
     if (!sourceEl || !canvas) return
-    const nativeW = cameraSource === 'phone' ? (sourceEl.naturalWidth || sourceEl.width || 0) : (sourceEl.videoWidth || 0)
-    const nativeH = cameraSource === 'phone' ? (sourceEl.naturalHeight || sourceEl.height || 0) : (sourceEl.videoHeight || 0)
+
+    const nativeW = isPhoneDevice ? (sourceEl.naturalWidth || sourceEl.width || 0) : (sourceEl.videoWidth || 0)
+    const nativeH = isPhoneDevice ? (sourceEl.naturalHeight || sourceEl.height || 0) : (sourceEl.videoHeight || 0)
     if (!nativeW || !nativeH) return
+
     const rect    = sourceEl.getBoundingClientRect()
     canvas.width  = rect.width
     canvas.height = rect.height
@@ -151,26 +215,37 @@ export default function FieldMonitoring () {
     const scaleY  = rect.height / nativeH
     const ctx     = canvas.getContext('2d')
     ctx.clearRect(0, 0, canvas.width, canvas.height)
+
     if (!Array.isArray(boxes)) return
-    boxes.forEach(d => {
+
+    boxes.forEach((d, idx) => {
       if (!d || !Array.isArray(d.box) || d.box.length < 4) return
+
       const [x1, y1, x2, y2] = d.box
-      const conf = d.confidence ?? d.box[4] ?? 0
-      const x = x1 * scaleX, y = y1 * scaleY
-      const w = (x2 - x1) * scaleX, h = (y2 - y1) * scaleY
-      const label = `${d.class ?? 'Unknown'} ${Math.round(conf * 100)}%`
-      ctx.font = '13px system-ui, sans-serif'
-      const tw = ctx.measureText(label).width
-      ctx.fillStyle = 'rgba(34,197,94,0.92)'
-      ctx.fillRect(x, y - 24, tw + 14, 24)
-      ctx.fillStyle = 'white'
-      ctx.fillText(label, x + 7, y - 7)
-      ctx.strokeStyle = 'rgb(34,197,94)'
-      ctx.lineWidth = 2
+      const conf  = d.confidence ?? d.box[4] ?? 0
+      const cls   = d.class ?? 'Unknown'
+      const color = getClassColor(cls)
+
+      const x = x1 * scaleX
+      const y = y1 * scaleY
+      const w = (x2 - x1) * scaleX
+      const h = (y2 - y1) * scaleY
+
+      // ── Semi-transparent fill inside the box ─────────────────────────
+      ctx.fillStyle = color.fill
+      ctx.fillRect(x, y, w, h)
+
+      // ── Main bounding box stroke ─────────────────────────────────────
+      ctx.strokeStyle = color.stroke
+      ctx.lineWidth   = 2
+      ctx.setLineDash([])
       ctx.strokeRect(x, y, w, h)
-      const cl = 16
-      ctx.strokeStyle = 'rgb(22,163,74)'
-      ctx.lineWidth = 3
+
+      // ── Corner accent brackets ────────────────────────────────────────
+      const cl = Math.min(18, w * 0.18, h * 0.18)
+      ctx.strokeStyle = color.stroke
+      ctx.lineWidth   = 3.5
+      ctx.lineCap     = 'round'
       const corners = [
         [x,     y,     x + cl, y,      x,      y + cl],
         [x + w, y,     x+w-cl, y,      x + w,  y + cl],
@@ -180,13 +255,87 @@ export default function FieldMonitoring () {
       corners.forEach(([mx, my, lx1, ly1, lx2, ly2]) => {
         ctx.beginPath(); ctx.moveTo(lx1, ly1); ctx.lineTo(mx, my); ctx.lineTo(lx2, ly2); ctx.stroke()
       })
+
+      // ── Detection index badge (small circle, top-left corner) ────────
+      const badgeR = 9
+      const bx     = x + badgeR + 3
+      const by     = y + badgeR + 3
+      ctx.beginPath()
+      ctx.arc(bx, by, badgeR, 0, Math.PI * 2)
+      ctx.fillStyle = color.stroke
+      ctx.fill()
+      ctx.fillStyle = '#fff'
+      ctx.font = 'bold 10px system-ui,sans-serif'
+      ctx.textAlign    = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(idx + 1, bx, by)
+      ctx.textAlign    = 'left'
+      ctx.textBaseline = 'alphabetic'
+
+      // ── Label pill above the box ─────────────────────────────────────
+      const confPct = Math.round(conf * 100)
+      const mainLabel = cls
+      const confLabel = `${confPct}%`
+
+      ctx.font = 'bold 12px system-ui,sans-serif'
+      const mainW = ctx.measureText(mainLabel).width
+      ctx.font = '11px system-ui,sans-serif'
+      const confW = ctx.measureText(confLabel).width
+
+      // Measure separator
+      ctx.font = '11px system-ui,sans-serif'
+      const sepW = ctx.measureText(' · ').width
+
+      const pillPad = 8
+      const pillW   = pillPad + mainW + sepW + confW + pillPad
+      const pillH   = 22
+      const pillX   = x
+      // Prefer above the box; clamp to top of canvas if needed
+      const pillY   = (y - pillH - 4) >= 0 ? y - pillH - 4 : y + 4
+
+      // Rounded rect helper (works without roundRect API)
+      const roundRect = (rx, ry, rw, rh, r) => {
+        ctx.beginPath()
+        ctx.moveTo(rx + r, ry)
+        ctx.lineTo(rx + rw - r, ry)
+        ctx.quadraticCurveTo(rx + rw, ry, rx + rw, ry + r)
+        ctx.lineTo(rx + rw, ry + rh - r)
+        ctx.quadraticCurveTo(rx + rw, ry + rh, rx + rw - r, ry + rh)
+        ctx.lineTo(rx + r, ry + rh)
+        ctx.quadraticCurveTo(rx, ry + rh, rx, ry + rh - r)
+        ctx.lineTo(rx, ry + r)
+        ctx.quadraticCurveTo(rx, ry, rx + r, ry)
+        ctx.closePath()
+      }
+
+      roundRect(pillX, pillY, pillW, pillH, 5)
+      ctx.fillStyle = color.label
+      ctx.fill()
+
+      // Class name (bold white)
+      let tx = pillX + pillPad
+      ctx.fillStyle = '#fff'
+      ctx.font = 'bold 12px system-ui,sans-serif'
+      ctx.fillText(mainLabel, tx, pillY + 15)
+      tx += mainW
+
+      // Separator
+      ctx.fillStyle = 'rgba(255,255,255,0.55)'
+      ctx.font = '11px system-ui,sans-serif'
+      ctx.fillText(' · ', tx, pillY + 15)
+      tx += sepW
+
+      // Confidence (lighter)
+      ctx.fillStyle = 'rgba(255,255,255,0.9)'
+      ctx.font = '11px system-ui,sans-serif'
+      ctx.fillText(confLabel, tx, pillY + 15)
     })
   }
 
   const captureFrame = () => {
     const canvas = captureCanvasRef.current
     if (!canvas) return null
-    if (cameraSource === 'phone') {
+    if (isPhoneDevice) {
       const img = phoneImgRef.current
       if (!img || !img.naturalWidth) return null
       canvas.width  = img.naturalWidth
@@ -220,7 +369,17 @@ export default function FieldMonitoring () {
         class: d.class ?? d.label ?? 'Unknown',
       }))
       setBoxes(normalized)
+
+      // Build class legend from all seen classes
       if (normalized.length > 0) {
+        setClassLegend(prev => {
+          const next = { ...prev }
+          normalized.forEach(d => {
+            const key = (d.class || 'Unknown').toLowerCase()
+            next[key] = { name: d.class || 'Unknown', color: getClassColor(d.class) }
+          })
+          return next
+        })
         setDetections(p => p + normalized.length)
         setConfidence(Math.round(normalized.reduce((s, d) => s + d.confidence, 0) / normalized.length * 100))
         setDetectionLog(p => [
@@ -241,7 +400,7 @@ export default function FieldMonitoring () {
     }
   }
 
-  const isPhoneReady     = cameraSource === 'phone' && cameraStarted && !phoneImgError
+  const isPhoneReady     = isPhoneDevice && cameraStarted && !phoneImgError
   const isDetectionReady = isPhoneReady || connectionState === 'connected'
 
   const status = (() => {
@@ -277,8 +436,32 @@ export default function FieldMonitoring () {
                   : connectionState === 'connecting' ? 'bg-yellow-400 animate-pulse'
                       : 'bg-gray-300'
 
+  // ── Class color legend pill row ────────────────────────────────────────
+  const ClassLegend = ({ dark = false }) => {
+    const entries = Object.values(classLegend)
+    if (entries.length === 0) return null
+    return (
+        <div className="flex flex-wrap gap-1.5">
+          {entries.map(({ name, color }) => (
+              <span
+                  key={name}
+                  className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2 py-1 rounded-full border"
+                  style={{
+                    background:   `${color.stroke}18`,
+                    borderColor:  `${color.stroke}40`,
+                    color:         color.stroke,
+                  }}
+              >
+            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: color.stroke }} />
+                {name}
+          </span>
+          ))}
+        </div>
+    )
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
-  //  FIELD SELECTOR COMPONENT
+  //  FIELD SELECTOR
   // ═══════════════════════════════════════════════════════════════════════
   const FieldSelector = ({ dark = false }) => (
       <div className="relative" ref={fieldDropdownRef}>
@@ -305,14 +488,6 @@ export default function FieldMonitoring () {
   ${dark ? 'bg-gray-900 border-white/10' : 'bg-white border-gray-100'}`}
                  style={{ maxHeight: 'min(420px, calc(100vh - 80px))' }}
             >
-              <style>{`
-            @keyframes dropIn {
-              from { opacity: 0; transform: translateY(-8px) scale(0.97); }
-              to   { opacity: 1; transform: translateY(0) scale(1); }
-            }
-          `}</style>
-
-              {/* Header */}
               <div className={`px-4 py-3 border-b flex items-center justify-between
             ${dark ? 'border-white/10' : 'border-gray-100'}`}>
                 <div className="flex items-center gap-2">
@@ -327,7 +502,6 @@ export default function FieldMonitoring () {
             </span>
               </div>
 
-              {/* "No field" option */}
               <button
                   onClick={() => { setSelectedField(null); setShowFieldDropdown(false) }}
                   className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors
@@ -362,8 +536,8 @@ export default function FieldMonitoring () {
 
               <div className={`mx-4 border-t ${dark ? 'border-white/[0.06]' : 'border-gray-100'}`} />
 
-              {/* Field list */}
-              <div className="overflow-y-auto py-1" style={{ maxHeight: 'min(224px, calc(100vh - 220px))' }}>                {fieldsLoading ? (
+              <div className="overflow-y-auto py-1" style={{ maxHeight: 'min(224px, calc(100vh - 220px))' }}>
+                {fieldsLoading ? (
                     <div className="flex items-center justify-center py-8 gap-2">
                       <svg className="w-4 h-4 animate-spin text-green-500" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -389,7 +563,6 @@ export default function FieldMonitoring () {
                                   : dark ? 'hover:bg-white/5' : 'hover:bg-gray-50'
                               }`}
                           >
-                            {/* Field avatar */}
                             <div className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 font-bold text-sm
                       ${isActive
                                 ? 'bg-green-500 text-white shadow-sm shadow-green-500/30'
@@ -397,7 +570,6 @@ export default function FieldMonitoring () {
                             }`}>
                               {field.fieldName.charAt(0).toUpperCase()}
                             </div>
-
                             <div className="flex-1 min-w-0">
                               <p className={`text-sm font-semibold truncate
                         ${isActive
@@ -411,7 +583,6 @@ export default function FieldMonitoring () {
                                 {field.farmers?.length > 0 && ` · ${field.farmers.length} farmer${field.farmers.length !== 1 ? 's' : ''}`}
                               </p>
                             </div>
-
                             {isActive && (
                                 <span className="text-green-500 flex-shrink-0">
                         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
@@ -429,7 +600,6 @@ export default function FieldMonitoring () {
       </div>
   )
 
-  // ── Selected field info badge ───────────────────────────────────────────
   const FieldBadge = ({ dark = false }) => {
     if (!selectedField) return null
     return (
@@ -453,24 +623,24 @@ export default function FieldMonitoring () {
   // ═══════════════════════════════════════════════════════════════════════
   const VideoArea = () => (
       <div ref={containerRef} className="relative w-full h-full">
-        {cameraSource === 'phone' ? (
+        {isPhoneDevice ? (
             <>
               {phoneImgError ? (
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 text-white gap-3">
                     <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
                     </svg>
-                    <p className="text-sm font-medium text-red-400">Could not load phone stream</p>
-                    <p className="text-xs text-gray-400 text-center px-6">Make sure the Vite proxy is configured and your IP camera app is running.</p>
+                    <p className="text-sm font-medium text-red-400">Could not load stream from <span className="font-mono text-xs">{streamUrl}</span></p>
+                    <p className="text-xs text-gray-400 text-center px-6">Make sure the device is reachable and the app is running.</p>
                     <button onClick={() => setPhoneImgError(false)} className="mt-1 text-xs bg-white/10 hover:bg-white/20 px-4 py-1.5 rounded-lg transition-colors">Retry</button>
                   </div>
               ) : (
                   <img
                       ref={phoneImgRef}
-                      src={PHONE_STREAM_URL}
-                      className="w-full h-full object-contain bg-black"
-                      alt="Phone camera stream"
+                      src={streamUrl}
                       crossOrigin="anonymous"
+                      className="w-full h-full object-contain bg-black"
+                      alt="Camera stream"
                       onLoad={() => setPhoneImgError(false)}
                       onError={() => setPhoneImgError(true)}
                   />
@@ -488,7 +658,7 @@ export default function FieldMonitoring () {
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
                           </svg>
                           <p className="text-sm font-medium text-gray-300">Waiting for drone to connect…</p>
-                          <p className="text-xs text-gray-500">WHEP: <span className="text-gray-400 font-mono text-[10px]">{WHEP_URL}</span></p>
+                          <p className="text-xs text-gray-500">WHEP: <span className="text-gray-400 font-mono text-[10px]">{whepUrl}</span></p>
                         </>
                     ) : connectionState === 'failed' ? (
                         <>
@@ -507,8 +677,15 @@ export default function FieldMonitoring () {
         <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
         <canvas ref={captureCanvasRef} className="hidden" />
 
+        {/* Class legend overlay — bottom-left of video */}
+        {!isFullscreen && Object.values(classLegend).length > 0 && (
+            <div className="absolute bottom-3 left-3">
+              <ClassLegend dark />
+            </div>
+        )}
+
         {!isFullscreen && boxes.length > 0 && (
-            <div className="absolute top-4 right-4 bg-green-500 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg">
+            <div className="absolute top-3 right-3 bg-black/60 backdrop-blur-sm text-white text-xs font-bold px-3 py-1.5 rounded-full border border-white/10">
               {boxes.length} detected
             </div>
         )}
@@ -530,34 +707,30 @@ export default function FieldMonitoring () {
         <div className="absolute inset-0 z-20 pointer-events-none"
              style={{ opacity: controlsVisible ? 1 : 0, transition: 'opacity 0.4s ease' }}>
 
-          {/* Top bar */}
           <div className="absolute top-0 left-0 right-0 px-6 pt-5 pb-2 flex items-start justify-between pointer-events-auto">
             <div>
               <p className="text-[10px] font-bold tracking-widest text-green-400 uppercase">Live Monitoring</p>
               <h1 className="text-lg font-bold text-white tracking-tight leading-tight">Field Monitoring</h1>
-              {selectedField && (
-                  <div className="mt-1">
-                    <FieldBadge dark />
-                  </div>
+              {selectedField && <div className="mt-1"><FieldBadge dark /></div>}
+              {/* Class legend in fullscreen */}
+              {Object.values(classLegend).length > 0 && (
+                  <div className="mt-2"><ClassLegend dark /></div>
               )}
             </div>
             <div className="flex items-center gap-2 flex-wrap justify-end">
-              {/* Field selector in fullscreen */}
               <FieldSelector dark />
 
-              <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border backdrop-blur-sm ${
-                  cameraSource === 'phone'
-                      ? 'bg-blue-500/20 text-blue-300 border-blue-500/30'
-                      : connectionState === 'connected'
-                          ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
-                          : 'bg-white/10 text-gray-400 border-white/20'}`}>
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                {cameraSource === 'phone'
-                    ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                    : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />}
-              </svg>
-                {cameraSource === 'phone' ? `Phone • ${PHONE_STREAM_DISPLAY}` : `WebRTC ${connectionState === 'connected' ? '• Live' : connectionState}`}
-            </span>
+              {selectedDevice && (
+                  <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border backdrop-blur-sm ${
+                      isPhoneDevice
+                          ? 'bg-blue-500/20 text-blue-300 border-blue-500/30'
+                          : connectionState === 'connected'
+                              ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
+                              : 'bg-white/10 text-gray-400 border-white/20'}`}>
+                  <DeviceIcon type={selectedDevice.type} size={12} />
+                    {selectedDevice.name}
+                </span>
+              )}
 
               {countingActive && (
                   <span className="inline-flex items-center gap-1.5 bg-red-500 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow">
@@ -568,7 +741,7 @@ export default function FieldMonitoring () {
                 <span className={`w-1.5 h-1.5 rounded-full ${statusDot}`} />{status}
               </div>
               {boxes.length > 0 && (
-                  <div className="bg-green-500 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow">
+                  <div className="bg-black/50 backdrop-blur-sm border border-white/10 text-white text-xs font-bold px-3 py-1.5 rounded-full">
                     {boxes.length} detected
                   </div>
               )}
@@ -589,7 +762,6 @@ export default function FieldMonitoring () {
             </div>
           </div>
 
-          {/* Bottom controls */}
           <div className="absolute bottom-0 left-0 right-0 px-6 pb-5 pt-4 flex items-end justify-between pointer-events-auto">
             <div className="flex gap-2">
               {!countingActive ? (
@@ -602,7 +774,7 @@ export default function FieldMonitoring () {
                     Start Detection
                   </button>
               ) : (
-                  <button onClick={() => { setCountingActive(false); setBoxes([]) }}
+                  <button onClick={() => { setCountingActive(false); setBoxes([]); setClassLegend({}) }}
                           className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition-colors shadow-lg">
                     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clipRule="evenodd" />
@@ -657,19 +829,28 @@ export default function FieldMonitoring () {
           <div className="overflow-y-auto flex-1">
             {detectionLog.length > 0 ? (
                 <div className="divide-y divide-white/[0.05]">
-                  {detectionLog.map(d => (
-                      <div key={d.id} className="px-5 py-3.5 hover:bg-white/[0.04] transition-colors">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="text-sm font-semibold text-white">{d.class}</p>
-                            <p className="text-xs text-gray-600 mt-0.5">{d.timestamp}</p>
+                  {detectionLog.map(d => {
+                    const color = getClassColor(d.class)
+                    return (
+                        <div key={d.id} className="px-5 py-3.5 hover:bg-white/[0.04] transition-colors">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color.stroke }} />
+                              <div>
+                                <p className="text-sm font-semibold text-white">{d.class}</p>
+                                <p className="text-xs text-gray-600 mt-0.5">{d.timestamp}</p>
+                              </div>
+                            </div>
+                            <span
+                                className="text-xs font-bold px-2.5 py-1 rounded-full border"
+                                style={{ background: `${color.stroke}20`, borderColor: `${color.stroke}40`, color: color.stroke }}
+                            >
+                            {Math.round(d.confidence * 100)}%
+                          </span>
                           </div>
-                          <span className="text-xs font-bold text-green-400 bg-green-500/15 border border-green-500/25 px-2.5 py-1 rounded-full">
-                      {Math.round(d.confidence * 100)}%
-                    </span>
                         </div>
-                      </div>
-                  ))}
+                    )
+                  })}
                 </div>
             ) : (
                 <div className="flex flex-col items-center justify-center h-full py-16 text-center px-6">
@@ -694,7 +875,7 @@ export default function FieldMonitoring () {
   )
 
   // ═══════════════════════════════════════════════════════════════════════
-  //  CAMERA SOURCE MODAL
+  //  DEVICE SOURCE MODAL
   // ═══════════════════════════════════════════════════════════════════════
   const SourceModal = () => (
       <div
@@ -716,97 +897,91 @@ export default function FieldMonitoring () {
 
           <div className="px-7 pt-7 pb-5">
             <div className="flex items-center justify-between mb-1">
-              <h2 className="text-xl font-bold text-gray-900 tracking-tight">Select Camera Source</h2>
+              <h2 className="text-xl font-bold text-gray-900 tracking-tight">Select Camera Device</h2>
               <button
                   onClick={() => setShowSourceModal(false)}
                   className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors"
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                <X size={14} />
               </button>
             </div>
-            <p className="text-sm text-gray-400">Choose how you want to stream video for pest detection</p>
-            {selectedField && (
-                <div className="mt-3">
-                  <FieldBadge />
-                </div>
-            )}
+            {selectedField && <div className="mt-3"><FieldBadge /></div>}
           </div>
 
           <div className="mx-7 border-t border-gray-100" />
 
-          <div className="px-7 py-5 flex flex-col gap-3">
-            {/* Drone */}
-            <button
-                onClick={() => handleSelectSource('drone')}
-                className="group relative w-full text-left rounded-2xl border-2 border-gray-100 hover:border-green-400 bg-gray-50 hover:bg-green-50 p-5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-green-100"
-            >
-              <div className="flex items-start gap-4">
-                <div className="flex-shrink-0 w-12 h-12 rounded-2xl bg-gradient-to-br from-green-400 to-emerald-600 flex items-center justify-center shadow-md shadow-green-200 group-hover:shadow-green-300 transition-shadow">
-                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 19l-7-7 7-7m0 14l7-7-7-7" />
-                  </svg>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="text-sm font-bold text-gray-900">DJI Mini 3 Drone</p>
-                    <span className="text-[10px] font-bold text-green-600 bg-green-100 px-2 py-0.5 rounded-full">WebRTC</span>
+          <div className="px-7 py-5 flex flex-col gap-3 max-h-[60vh] overflow-y-auto">
+            {devices.length === 0 ? (
+                <div className="py-10 text-center">
+                  <div className="w-12 h-12 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-3">
+                    <Wifi size={20} className="text-gray-300" />
                   </div>
-                  <p className="text-xs text-gray-500 leading-relaxed">Stream from your DJI Mini 3 via MediaMTX. Requires DJI Fly app RTMP setup.</p>
-                  <div className="mt-2.5 flex items-center gap-1.5 bg-green-50 border border-green-100 rounded-lg px-2.5 py-1.5">
-                    <svg className="w-3 h-3 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                    </svg>
-                    <span className="text-[10px] font-mono font-semibold text-green-600 truncate">{WHEP_URL}</span>
-                  </div>
+                  <p className="text-sm font-medium text-gray-500 mb-1">No devices configured</p>
+                  <p className="text-xs text-gray-400 mb-4">Go to Settings → Camera Devices to add your camera or drone</p>
+                  <a href="/settings"
+                     className="inline-flex items-center gap-1.5 text-xs font-semibold text-green-600 bg-green-50 border border-green-100 px-4 py-2 rounded-xl hover:bg-green-100 transition-colors">
+                    <Settings size={12} />
+                    Open Settings
+                  </a>
                 </div>
-                <svg className="w-5 h-5 text-gray-300 group-hover:text-green-400 transition-colors flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </div>
-            </button>
+            ) : (
+                devices.map(device => {
+                  const typeInfo = { phone: { label: 'IP Stream', color: 'blue' }, drone: { label: 'WebRTC', color: 'green' }, generic: { label: 'Stream', color: 'gray' } }[device.type] || { label: 'Stream', color: 'gray' }
+                  const styles = DEVICE_TYPE_STYLES[device.type] || DEVICE_TYPE_STYLES.generic
+                  const url = getDeviceStreamUrl(device)
 
-            {/* Phone */}
-            <button
-                onClick={() => handleSelectSource('phone')}
-                className="group relative w-full text-left rounded-2xl border-2 border-gray-100 hover:border-blue-400 bg-gray-50 hover:bg-blue-50 p-5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-100"
-            >
-              <div className="flex items-start gap-4">
-                <div className="flex-shrink-0 w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-400 to-indigo-600 flex items-center justify-center shadow-md shadow-blue-200 group-hover:shadow-blue-300 transition-shadow">
-                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                  </svg>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="text-sm font-bold text-gray-900">Phone Camera</p>
-                    <span className="text-[10px] font-bold text-blue-600 bg-blue-100 px-2 py-0.5 rounded-full">IP Stream</span>
-                  </div>
-                  <p className="text-xs text-gray-500 leading-relaxed">Streams from your phone's IP camera app over the local network.</p>
-                  <div className="mt-2.5 flex items-center gap-1.5 bg-blue-50 border border-blue-100 rounded-lg px-2.5 py-1.5">
-                    <svg className="w-3 h-3 text-blue-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                    </svg>
-                    <span className="text-[10px] font-mono font-semibold text-blue-600 truncate">{PHONE_STREAM_DISPLAY}</span>
-                  </div>
-                </div>
-                <svg className="w-5 h-5 text-gray-300 group-hover:text-blue-400 transition-colors flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </div>
-            </button>
+                  return (
+                      <button
+                          key={device.id}
+                          onClick={() => handleSelectDevice(device)}
+                          className={`group relative w-full text-left rounded-2xl border-2 border-gray-100 bg-gray-50 p-5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg
+                      ${device.type === 'drone' ? 'hover:border-green-400 hover:bg-green-50 hover:shadow-green-100' : 'hover:border-blue-400 hover:bg-blue-50 hover:shadow-blue-100'}`}
+                      >
+                        <div className="flex items-start gap-4">
+                          <div className={`flex-shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center shadow-md transition-shadow
+                        ${device.type === 'drone'
+                              ? 'bg-gradient-to-br from-green-400 to-emerald-600 shadow-green-200 group-hover:shadow-green-300'
+                              : device.type === 'phone'
+                                  ? 'bg-gradient-to-br from-blue-400 to-indigo-600 shadow-blue-200 group-hover:shadow-blue-300'
+                                  : 'bg-gradient-to-br from-gray-400 to-gray-600 shadow-gray-200'}`}>
+                            <DeviceIcon type={device.type} size={22} />
+                            <span className="text-white sr-only">{device.type}</span>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <p className="text-sm font-bold text-gray-900">{device.name}</p>
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${styles.badge}`}>
+                            {typeInfo.label}
+                          </span>
+                            </div>
+                            {device.notes && <p className="text-xs text-gray-500 mb-1.5 leading-relaxed">{device.notes}</p>}
+                            <div className={`mt-1 flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 border
+                          ${device.type === 'drone' ? 'bg-green-50 border-green-100' : 'bg-blue-50 border-blue-100'}`}>
+                              <Wifi size={10} className={device.type === 'drone' ? 'text-green-400' : 'text-blue-400'} />
+                              <span className={`text-[10px] font-mono font-semibold truncate ${device.type === 'drone' ? 'text-green-600' : 'text-blue-600'}`}>{url}</span>
+                            </div>
+                          </div>
+                          <svg className={`w-5 h-5 flex-shrink-0 mt-0.5 transition-colors text-gray-300 ${device.type === 'drone' ? 'group-hover:text-green-400' : 'group-hover:text-blue-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                        </div>
+                      </button>
+                  )
+                })
+            )}
           </div>
 
-          <div className="mx-7 mb-6 px-4 py-3 bg-amber-50 border border-amber-100 rounded-xl flex items-start gap-2.5">
-            <svg className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <p className="text-xs text-amber-700 leading-relaxed">
-              For drone: ensure MediaMTX is running and DJI Fly streams RTMP to <span className="font-mono font-semibold">:1935/drone</span>.
-              For phone: open <span className="font-semibold">IP Webcam</span> on Android, then add the Vite proxy config pointing to your phone's IP.
-            </p>
-          </div>
+          {devices.length > 0 && (
+              <div className="mx-7 mb-6 px-4 py-3 bg-amber-50 border border-amber-100 rounded-xl flex items-start gap-2.5">
+                <svg className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p className="text-xs text-amber-700 leading-relaxed">
+                  Make sure your device is powered on and reachable on the local network.
+                  Manage devices in <span className="font-semibold">Settings → Camera Devices</span>.
+                </p>
+              </div>
+          )}
         </div>
       </div>
   )
@@ -825,11 +1000,10 @@ export default function FieldMonitoring () {
               <p className="text-xs font-semibold tracking-widest text-green-600 uppercase mb-1">Live</p>
               <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Field Monitoring</h1>
             </div>
-            {/* Field selector in header */}
             <FieldSelector />
           </div>
 
-          {/* ── Selected field info strip (when a field is chosen) ── */}
+          {/* ── Selected field info strip ── */}
           {selectedField && (
               <div className="bg-white rounded-2xl border border-green-100 shadow-sm px-5 py-4 flex flex-wrap items-center gap-4">
                 <div className="w-10 h-10 rounded-xl bg-green-500 flex items-center justify-center text-white font-bold text-lg flex-shrink-0 shadow-sm shadow-green-300">
@@ -865,24 +1039,20 @@ export default function FieldMonitoring () {
             <div className="lg:col-span-2 space-y-4">
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
 
-                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-sm font-semibold text-gray-700">Camera Feed</h2>
-                    <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                        cameraSource === 'phone'
-                            ? 'bg-blue-50 text-blue-600 border-blue-100'
-                            : connectionState === 'connected'
-                                ? 'bg-cyan-50 text-cyan-600 border-cyan-100'
-                                : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
-                    <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      {cameraSource === 'phone'
-                          ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                          : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />}
-                    </svg>
-                      {cameraSource === 'phone' ? 'IP Stream' : 'WebRTC'}
-                  </span>
+                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
+                    <h2 className="text-sm font-semibold text-gray-700 flex-shrink-0">Camera Feed</h2>
+                    {selectedDevice && (
+                        <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border flex-shrink-0 ${
+                            DEVICE_TYPE_STYLES[selectedDevice.type]?.badge || DEVICE_TYPE_STYLES.generic.badge}`}>
+                          <DeviceIcon type={selectedDevice.type} size={10} />
+                          {selectedDevice.name}
+                        </span>
+                    )}
+                    {/* Class legend appears in the header once classes are seen */}
+                    {Object.values(classLegend).length > 0 && <ClassLegend />}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-shrink-0">
                     {countingActive && (
                         <span className="inline-flex items-center gap-1.5 bg-red-500 text-white text-xs font-bold px-3 py-1.5 rounded-full">
                       <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />LIVE
@@ -910,28 +1080,44 @@ export default function FieldMonitoring () {
                    ${isFullscreen ? 'w-screen h-screen' : 'aspect-video'}`}
                      style={isFullscreen ? { cursor: controlsVisible ? 'default' : 'none' } : {}}>
                   {!cameraStarted ? (
-                      <div className="text-center">
+                      <div className="text-center px-6">
                         <div className="w-14 h-14 rounded-2xl bg-white/5 flex items-center justify-center mx-auto mb-4">
                           <svg className="w-6 h-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
                           </svg>
                         </div>
-                        {selectedField ? (
+                        {devices.length === 0 ? (
                             <>
-                              <p className="text-gray-300 text-sm mb-0.5">Ready to monitor</p>
-                              <p className="text-green-400 text-xs font-semibold mb-1">{selectedField.fieldName}</p>
-                              <p className="text-gray-600 text-xs mb-5">{selectedField.area} {selectedField.measurementUnit} · {selectedField.crops} crops</p>
+                              <p className="text-gray-400 text-sm mb-1">No devices configured</p>
+                              <p className="text-gray-500 text-xs mb-5">
+                                Add camera devices in <span className="text-gray-300 font-semibold">Settings → Camera Devices</span> first
+                              </p>
+                              <a href="/settings"
+                                 className="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/20 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition-colors">
+                                <Settings size={14} />
+                                Go to Settings
+                              </a>
                             </>
                         ) : (
                             <>
-                              <p className="text-gray-500 text-sm mb-1">No camera connected</p>
-                              <p className="text-gray-600 text-xs mb-5">Phone IP stream or DJI Mini 3 via WebRTC</p>
+                              {selectedField ? (
+                                  <>
+                                    <p className="text-gray-300 text-sm mb-0.5">Ready to monitor</p>
+                                    <p className="text-green-400 text-xs font-semibold mb-1">{selectedField.fieldName}</p>
+                                    <p className="text-gray-600 text-xs mb-5">{selectedField.area} {selectedField.measurementUnit} · {selectedField.crops} crops</p>
+                                  </>
+                              ) : (
+                                  <>
+                                    <p className="text-gray-500 text-sm mb-1">No camera connected</p>
+                                    <p className="text-gray-600 text-xs mb-5">{devices.length} device{devices.length !== 1 ? 's' : ''} available</p>
+                                  </>
+                              )}
+                              <button onClick={handleConnectDevice}
+                                      className="bg-green-500 hover:bg-green-600 text-white text-sm font-semibold px-6 py-2.5 rounded-xl transition-colors active:scale-95">
+                                Connect Camera
+                              </button>
                             </>
                         )}
-                        <button onClick={handleMountCamera}
-                                className="bg-green-500 hover:bg-green-600 text-white text-sm font-semibold px-6 py-2.5 rounded-xl transition-colors active:scale-95">
-                          Connect Camera
-                        </button>
                       </div>
                   ) : (
                       <VideoArea />
@@ -950,7 +1136,7 @@ export default function FieldMonitoring () {
                             Start Detection
                           </button>
                       ) : (
-                          <button onClick={() => { setCountingActive(false); setBoxes([]) }}
+                          <button onClick={() => { setCountingActive(false); setBoxes([]); setClassLegend({}) }}
                                   className="flex-1 flex items-center justify-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-semibold py-2.5 rounded-xl transition-colors">
                             <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                               <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clipRule="evenodd" />
@@ -993,19 +1179,36 @@ export default function FieldMonitoring () {
               <div className="overflow-y-auto flex-1">
                 {detectionLog.length > 0 ? (
                     <div className="divide-y divide-gray-100">
-                      {detectionLog.map(d => (
-                          <div key={d.id} className="px-5 py-3.5 hover:bg-gray-50/70 transition-colors">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <p className="text-sm font-semibold text-gray-900">{d.class}</p>
-                                <p className="text-xs text-gray-400 mt-0.5">{d.timestamp}</p>
+                      {detectionLog.map(d => {
+                        const color = getClassColor(d.class)
+                        return (
+                            <div key={d.id} className="px-5 py-3.5 hover:bg-gray-50/70 transition-colors">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  {/* Per-class color indicator dot */}
+                                  <span
+                                      className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                                      style={{ background: color.stroke }}
+                                  />
+                                  <div>
+                                    <p className="text-sm font-semibold text-gray-900">{d.class}</p>
+                                    <p className="text-xs text-gray-400 mt-0.5">{d.timestamp}</p>
+                                  </div>
+                                </div>
+                                <span
+                                    className="text-xs font-bold px-2.5 py-1 rounded-full border"
+                                    style={{
+                                      background:  `${color.stroke}15`,
+                                      borderColor: `${color.stroke}30`,
+                                      color:        color.stroke,
+                                    }}
+                                >
+                                {Math.round(d.confidence * 100)}%
+                              </span>
                               </div>
-                              <span className="text-xs font-bold text-green-600 bg-green-50 border border-green-100 px-2.5 py-1 rounded-full">
-                          {Math.round(d.confidence * 100)}%
-                        </span>
                             </div>
-                          </div>
-                      ))}
+                        )
+                      })}
                     </div>
                 ) : (
                     <div className="flex flex-col items-center justify-center h-full py-16 text-center px-6">

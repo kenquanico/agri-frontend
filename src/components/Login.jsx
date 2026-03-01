@@ -142,8 +142,9 @@ export default function Login() {
 
             {/* Submit */}
             <button
-                type="button"
+                type="submit"
                 onClick={handleSubmit}
+                onKeyDown={e => {if (e.key === 'Enter') handleSubmit();}}
                 disabled={isLoading}
                 className="w-full bg-green-600 hover:bg-green-700 text-white text-sm font-semibold py-2.5 rounded-xl active:scale-95 transition-all shadow-sm shadow-green-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >

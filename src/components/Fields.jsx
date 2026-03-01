@@ -25,7 +25,11 @@ export default function Fields() {
     const fetchFields = async () => {
         try {
             const res = await api.get("/api/fields")
-            setFields(res.data.data)
+            const normalized = res.data.data.map(field => ({
+                ...field,
+                farmers: field.farmers ?? []  // ensure farmers array always exists
+            }))
+            setFields(normalized)
         } catch (error) {
             console.error("Failed to fetch fields", error)
         }
@@ -68,15 +72,22 @@ export default function Fields() {
         setSelectedFieldId(id)
         setShowFarmerModal(true)
     }
-
-    const handleAddFarmer = () => {
+    const handleAddFarmer = async () => {
         if (!farmerInput.trim()) return
-        setFields(fields.map(f =>
-            f.id === selectedFieldId
-                ? { ...f, farmers: [...f.farmers, farmerInput.trim()] }
-                : f
-        ))
-        setFarmerInput('')
+        try {
+            await api.post(`/api/fields/${selectedFieldId}/farmers`, {
+                name: farmerInput.trim()
+            })
+            // Update local state optimistically
+            setFields(fields.map(f =>
+                f.id === selectedFieldId
+                    ? { ...f, farmers: [...(f.farmers ?? []), farmerInput.trim()] }
+                    : f
+            ))
+            setFarmerInput('')
+        } catch (error) {
+            console.error("Failed to add farmer", error)
+        }
     }
 
     const handleCloseForm = () => {
@@ -388,7 +399,7 @@ export default function Fields() {
                                     <input
                                         value={farmerInput}
                                         onChange={e => setFarmerInput(e.target.value)}
-                                        onKeyPress={e => e.key === 'Enter' && handleAddFarmer()}
+                                        onKeyDown={e => e.key === 'Enter' && handleAddFarmer()}
                                         className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-green-500/30 focus:border-green-500 transition-all"
                                         placeholder="Farmer name"
                                     />
@@ -400,15 +411,16 @@ export default function Fields() {
                                     </button>
                                 </div>
 
+
                                 {/* Farmer List */}
                                 <div className="divide-y divide-gray-100">
                                     {getSelectedField()?.farmers?.length > 0 ? (
                                         getSelectedField()?.farmers.map((f, i) => (
-                                            <div key={i} className="flex items-center gap-3 py-3">
-                                                <div className="w-7 h-7 rounded-full bg-green-50 border border-green-100 flex items-center justify-center flex-shrink-0">
-                          <span className="text-xs font-bold text-green-600">
-                            {f.charAt(0).toUpperCase()}
-                          </span>
+                                                <div key={i} className="flex items-center gap-3 py-3">
+                                                    <div className="w-7 h-7 rounded-full bg-green-50 border border-green-100 flex items-center justify-center flex-shrink-0">
+                                                      <span className="text-xs font-bold text-green-600">
+                                                    {f.charAt(0).toUpperCase()}
+                                                  </span>
                                                 </div>
                                                 <span className="text-sm text-gray-700">{f}</span>
                                             </div>

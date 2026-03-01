@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Check, Plus, Save, RotateCcw, AlertTriangle, Trash2, Edit2, X, ChevronDown } from "lucide-react";
+import { Check, Plus, Save, RotateCcw, AlertTriangle, Trash2, Edit2, X, ChevronDown, Wifi, Smartphone, Radio } from "lucide-react";
 import api from "../api/api";
 
 function Toggle({ checked, onChange }) {
@@ -54,6 +54,18 @@ const SEVERITY = {
   low:      { bg: "bg-blue-50",   text: "text-blue-700",   border: "border-blue-200",   dot: "bg-blue-400"   },
 };
 
+const DEVICE_TYPES = [
+  { value: "phone", label: "Phone / IP Camera", icon: Smartphone, color: "blue" },
+  { value: "drone", label: "Drone (WebRTC/WHEP)", icon: Radio, color: "green" },
+  { value: "generic", label: "Generic Stream", icon: Wifi, color: "gray" },
+];
+
+const DEVICE_TYPE_STYLES = {
+  phone:   { badge: "bg-blue-50 text-blue-700 border-blue-100",   icon: "bg-blue-100 text-blue-600"   },
+  drone:   { badge: "bg-green-50 text-green-700 border-green-100", icon: "bg-green-100 text-green-600" },
+  generic: { badge: "bg-gray-50 text-gray-600 border-gray-200",   icon: "bg-gray-100 text-gray-500"   },
+};
+
 export default function Settings() {
   const [classifications, setClassifications] = useState([]);
   const [error, setError]           = useState(null);
@@ -85,6 +97,21 @@ export default function Settings() {
     notifications: { email: true, push: false, sms: false },
     general:       { totalCrops: 128, alertCooldown: 300, showConfidenceScore: true },
   });
+
+  // ── Camera Devices state ────────────────────────────────────────────────
+  const [devices, setDevices] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("cameraDevices") || "[]"); } catch { return []; }
+  });
+  const [showAddDevice, setShowAddDevice]   = useState(false);
+  const [editingDevice, setEditingDevice]   = useState(null); // device id being edited
+  const [deviceEditForm, setDeviceEditForm] = useState({});
+  const [newDevice, setNewDevice] = useState({ name: "", ip: "", type: "phone", path: "/video", notes: "" });
+  const [deviceError, setDeviceError] = useState("");
+
+  // Persist devices to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem("cameraDevices", JSON.stringify(devices));
+  }, [devices]);
 
   useEffect(() => {
     api.get("/api/models")
@@ -124,6 +151,7 @@ export default function Settings() {
     try {
       localStorage.setItem("appSettings", JSON.stringify(settings));
       localStorage.setItem("classifications", JSON.stringify(classifications));
+      localStorage.setItem("cameraDevices", JSON.stringify(devices));
       setHasChanges(false); setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch { alert("Failed to save settings"); }
@@ -200,6 +228,45 @@ export default function Settings() {
     } catch (err) {
       setUploadError(err.response?.data?.message || "Upload failed");
     } finally { setIsUploading(false); }
+  };
+
+  // ── Device handlers ─────────────────────────────────────────────────────
+  const validateDevice = (d) => {
+    if (!d.name.trim())  return "Device name is required.";
+    if (!d.ip.trim())    return "IP address or URL is required.";
+    return "";
+  };
+
+  const handleAddDevice = () => {
+    const err = validateDevice(newDevice);
+    if (err) { setDeviceError(err); return; }
+    const device = { ...newDevice, id: Date.now().toString() };
+    setDevices(p => [...p, device]);
+    setNewDevice({ name: "", ip: "", type: "phone", path: "/video", notes: "" });
+    setShowAddDevice(false);
+    setDeviceError("");
+    setHasChanges(true);
+  };
+
+  const handleSaveDevice = (id) => {
+    const err = validateDevice(deviceEditForm);
+    if (err) { setDeviceError(err); return; }
+    setDevices(p => p.map(d => d.id === id ? { ...deviceEditForm } : d));
+    setEditingDevice(null);
+    setDeviceEditForm({});
+    setDeviceError("");
+    setHasChanges(true);
+  };
+
+  const handleDeleteDevice = (id) => {
+    if (!window.confirm("Delete this device?")) return;
+    setDevices(p => p.filter(d => d.id !== id));
+    setHasChanges(true);
+  };
+
+  const getDeviceStreamUrl = (device) => {
+    if (device.type === "drone") return device.ip; // full WHEP URL
+    return `http://${device.ip}${device.path || "/video"}`;
   };
 
   const filteredClassifications = Array.isArray(classifications)
@@ -295,15 +362,197 @@ export default function Settings() {
           <Section title="Notifications">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-x-10">
               {[
-                { label: "Email",          field: "email" },
-                { label: "Push",           field: "push"  },
-                { label: "SMS",            field: "sms"   },
+                { label: "Email", field: "email" },
+                { label: "Push",  field: "push"  },
+                { label: "SMS",   field: "sms"   },
               ].map(({ label, field }) => (
                   <ToggleRow key={field} label={label}
                              checked={settings.notifications[field]}
                              onChange={e => handleSettingsChange("notifications", field, e.target.checked)} />
               ))}
             </div>
+          </Section>
+
+          {/* ── Camera Devices ── */}
+          <Section title="Camera Devices"
+                   action={
+                     <button onClick={() => { setShowAddDevice(true); setDeviceError(""); }}
+                             className="flex items-center gap-1.5 bg-green-600 text-white text-xs font-bold px-3.5 py-2 rounded-xl hover:bg-green-700 transition-colors shadow-sm shadow-green-200">
+                       <Plus size={13} /> Add Device
+                     </button>
+                   }
+          >
+            <p className="text-xs text-gray-400 mb-5">
+              Configure cameras and streaming devices. These will appear as options when connecting in Field Monitoring.
+            </p>
+
+            {devices.length === 0 ? (
+                <div className="py-12 text-center">
+                  <div className="w-12 h-12 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-3">
+                    <Wifi size={20} className="text-gray-300" />
+                  </div>
+                  <p className="text-sm font-medium text-gray-400">No devices configured</p>
+                  <p className="text-xs text-gray-300 mt-1">Add a phone IP camera or drone WHEP endpoint to get started</p>
+                </div>
+            ) : (
+                <div className="space-y-3">
+                  {devices.map(device => {
+                    const isEditingThis = editingDevice === device.id;
+                    const cur = isEditingThis ? deviceEditForm : device;
+                    const typeInfo = DEVICE_TYPES.find(t => t.value === cur.type) || DEVICE_TYPES[2];
+                    const styles = DEVICE_TYPE_STYLES[cur.type] || DEVICE_TYPE_STYLES.generic;
+                    const IconComp = typeInfo.icon;
+                    const streamUrl = getDeviceStreamUrl(cur);
+
+                    return (
+                        <div key={device.id}
+                             className="border border-gray-100 rounded-2xl p-5 hover:border-gray-200 transition-colors bg-white group">
+                          {isEditingThis ? (
+                              /* ── Edit mode ── */
+                              <div className="space-y-4">
+                                {deviceError && (
+                                    <div className="flex items-center gap-2 bg-red-50 border border-red-100 rounded-xl px-3 py-2.5 text-xs text-red-700">
+                                      <AlertTriangle size={12} className="text-red-400 flex-shrink-0" />
+                                      {deviceError}
+                                    </div>
+                                )}
+                                <div className="grid grid-cols-2 gap-3">
+                                  <Field label="Device Name">
+                                    <input type="text" value={cur.name}
+                                           onChange={e => setDeviceEditForm(p => ({ ...p, name: e.target.value }))}
+                                           placeholder="e.g., Backfield Drone"
+                                           className={inputCls} />
+                                  </Field>
+                                  <Field label="Type">
+                                    <select value={cur.type}
+                                            onChange={e => setDeviceEditForm(p => ({ ...p, type: e.target.value }))}
+                                            className={selectCls}>
+                                      {DEVICE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                                    </select>
+                                  </Field>
+                                </div>
+                                <Field label={cur.type === "drone" ? "WHEP URL" : "IP Address"}>
+                                  <input type="text" value={cur.ip}
+                                         onChange={e => setDeviceEditForm(p => ({ ...p, ip: e.target.value }))}
+                                         placeholder={cur.type === "drone" ? "http://192.168.1.97:8889/drone/whep" : "192.168.1.102:8080"}
+                                         className={inputCls} />
+                                </Field>
+                                {cur.type !== "drone" && (
+                                    <Field label="Stream Path" hint="appended after IP">
+                                      <input type="text" value={cur.path || ""}
+                                             onChange={e => setDeviceEditForm(p => ({ ...p, path: e.target.value }))}
+                                             placeholder="/video"
+                                             className={inputCls} />
+                                    </Field>
+                                )}
+                                <Field label="Notes">
+                                  <input type="text" value={cur.notes || ""}
+                                         onChange={e => setDeviceEditForm(p => ({ ...p, notes: e.target.value }))}
+                                         placeholder="Optional description"
+                                         className={inputCls} />
+                                </Field>
+                                <div className="flex gap-2 pt-1">
+                                  <button onClick={() => handleSaveDevice(device.id)}
+                                          className="flex items-center gap-1.5 bg-green-600 text-white text-xs font-bold px-4 py-2 rounded-xl hover:bg-green-700 transition-colors">
+                                    <Check size={12} /> Save
+                                  </button>
+                                  <button onClick={() => { setEditingDevice(null); setDeviceEditForm({}); setDeviceError(""); }}
+                                          className="flex items-center gap-1.5 bg-gray-100 text-gray-600 text-xs font-semibold px-4 py-2 rounded-xl hover:bg-gray-200 transition-colors">
+                                    <X size={12} /> Cancel
+                                  </button>
+                                </div>
+                              </div>
+                          ) : (
+                              /* ── View mode ── */
+                              <div className="flex items-start gap-4">
+                                <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${styles.icon}`}>
+                                  <IconComp size={18} />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <h3 className="text-sm font-bold text-gray-900">{device.name}</h3>
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border capitalize ${styles.badge}`}>
+                                      {typeInfo.label.split(" ")[0]}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs font-mono text-gray-500 truncate">{streamUrl}</p>
+                                  {device.notes && <p className="text-xs text-gray-400 mt-1">{device.notes}</p>}
+                                </div>
+                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                                  <button onClick={() => { setEditingDevice(device.id); setDeviceEditForm({ ...device }); setDeviceError(""); }}
+                                          className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-xl transition-colors">
+                                    <Edit2 size={14} />
+                                  </button>
+                                  <button onClick={() => handleDeleteDevice(device.id)}
+                                          className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors">
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              </div>
+                          )}
+                        </div>
+                    );
+                  })}
+                </div>
+            )}
+
+            {/* Inline Add Device Form */}
+            {showAddDevice && (
+                <div className="mt-4 border-2 border-dashed border-green-200 rounded-2xl p-5 bg-green-50/40 space-y-4">
+                  <p className="text-xs font-bold text-green-700 uppercase tracking-wider">New Device</p>
+                  {deviceError && (
+                      <div className="flex items-center gap-2 bg-red-50 border border-red-100 rounded-xl px-3 py-2.5 text-xs text-red-700">
+                        <AlertTriangle size={12} className="text-red-400 flex-shrink-0" />
+                        {deviceError}
+                      </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Device Name">
+                      <input type="text" value={newDevice.name}
+                             onChange={e => setNewDevice(p => ({ ...p, name: e.target.value }))}
+                             placeholder="e.g., South Field Drone"
+                             className={inputCls} />
+                    </Field>
+                    <Field label="Type">
+                      <select value={newDevice.type}
+                              onChange={e => setNewDevice(p => ({ ...p, type: e.target.value }))}
+                              className={selectCls}>
+                        {DEVICE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                      </select>
+                    </Field>
+                  </div>
+                  <Field label={newDevice.type === "drone" ? "WHEP URL" : "IP Address"}>
+                    <input type="text" value={newDevice.ip}
+                           onChange={e => setNewDevice(p => ({ ...p, ip: e.target.value }))}
+                           placeholder={newDevice.type === "drone" ? "http://192.168.1.97:8889/drone/whep" : "192.168.1.102:8080"}
+                           className={inputCls} />
+                  </Field>
+                  {newDevice.type !== "drone" && (
+                      <Field label="Stream Path" hint="appended after IP">
+                        <input type="text" value={newDevice.path}
+                               onChange={e => setNewDevice(p => ({ ...p, path: e.target.value }))}
+                               placeholder="/video"
+                               className={inputCls} />
+                      </Field>
+                  )}
+                  <Field label="Notes">
+                    <input type="text" value={newDevice.notes}
+                           onChange={e => setNewDevice(p => ({ ...p, notes: e.target.value }))}
+                           placeholder="Optional description"
+                           className={inputCls} />
+                  </Field>
+                  <div className="flex gap-2">
+                    <button onClick={handleAddDevice}
+                            className="flex items-center gap-1.5 bg-green-600 text-white text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-green-700 transition-colors">
+                      <Plus size={12} /> Add Device
+                    </button>
+                    <button onClick={() => { setShowAddDevice(false); setDeviceError(""); setNewDevice({ name: "", ip: "", type: "phone", path: "/video", notes: "" }); }}
+                            className="flex items-center gap-1.5 bg-white text-gray-600 text-xs font-semibold px-4 py-2.5 rounded-xl border border-gray-200 hover:bg-gray-50 transition-colors">
+                      <X size={12} /> Cancel
+                    </button>
+                  </div>
+                </div>
+            )}
           </Section>
 
           {/* ── Models ── */}
@@ -515,7 +764,6 @@ export default function Settings() {
             </div>
           </Section>
 
-          {/* bottom padding */}
           <div className="h-8" />
         </div>
 
