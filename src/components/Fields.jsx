@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, Edit2, Users, Activity, X, Sprout, ChevronRight } from 'lucide-react'
+import {Plus, Trash2, Edit2, Users, Activity, X, Sprout, ChevronRight, Trash, TrashIcon} from 'lucide-react'
 import axios from "axios";
 import api from '../api/api';
 
@@ -18,7 +18,41 @@ export default function Fields() {
         crops: ''
     })
 
-    useEffect(() => {
+
+    const persistDetection = async({field, detection}) => {
+        const payload = {
+            fieldId: field.id,
+            field: field.fieldName,
+            location: field.fieldName,
+            type: detection.type, // "Disease" | "Pest"
+            class: detection.name,
+            name: detection.name,
+            confidence: detection.confidence > 1 ? detection.confidence / 100 : detection.confidence,
+            severity: detection.severity, // "high" | "medium" | "low"
+            timestamp: new Date().toISOString(),
+            source: 'field-monitoring',
+        }
+
+        // Try both known endpoints so either backend route works
+        try {
+            await api.post('/api/alarms', payload)
+            return
+        } catch (e1) {
+            try {
+                await api.post('/api/detections', payload)
+            } catch (e2) {
+                console.error('Failed to persist field monitoring detection', e2)
+            }
+        }
+
+    }
+
+    const handleMonitoringDetection = async (field, detection) => {
+        // existing local UI updates...
+        await persistDetection({ field, detection })
+    }
+
+    useEffect(  () => {
         fetchFields()
     }, [])
 
@@ -35,6 +69,15 @@ export default function Fields() {
         }
     }
 
+    const handleDeleteFarmer = (farmerName) => {
+            setFields(prev =>
+            prev.map(field =>
+                field.id === selectedFieldId
+                    ? { ...field, farmers: field.farmers.filter(f => f !== farmerName) }
+                    : field
+            )
+        );
+    };
     const handleInputChange = e => {
         const { name, value, type } = e.target
         setFormData(prev => ({
@@ -286,7 +329,7 @@ export default function Fields() {
                                     onClick={handleCloseForm}
                                     className="p-2 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
                                 >
-                                    <X size={18} />
+                                    F
                                 </button>
                             </div>
 
@@ -413,17 +456,23 @@ export default function Fields() {
 
 
                                 {/* Farmer List */}
-                                <div className="divide-y divide-gray-100">
+                                <div className="divide-y divide-gray-100 justify-between">
                                     {getSelectedField()?.farmers?.length > 0 ? (
                                         getSelectedField()?.farmers.map((f, i) => (
                                                 <div key={i} className="flex items-center gap-3 py-3">
-                                                    <div className="w-7 h-7 rounded-full bg-green-50 border border-green-100 flex items-center justify-center flex-shrink-0">
+                                                    <div className=" w-7 h-7 rounded-full bg-green-50 border border-green-100 flex items-center justify-center flex-shrink-0">
                                                       <span className="text-xs font-bold text-green-600">
                                                     {f.charAt(0).toUpperCase()}
                                                   </span>
                                                 </div>
-                                                <span className="text-sm text-gray-700">{f}</span>
-                                            </div>
+                                                    <span className="text-sm text-gray-700">{f}</span>
+                                                    <TrashIcon className="ml-auto h-5 w-5 text-red-400/70"
+                                                    onClick={() => handleDeleteFarmer(f)}/>
+
+
+
+
+                                     </div>
                                         ))
                                     ) : (
                                         <div className="py-10 text-center">

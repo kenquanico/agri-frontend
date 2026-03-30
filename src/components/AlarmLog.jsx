@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import api from '../api/api'
 
+const SHARED_DETECTIONS_KEY = 'agriSharedDetections'
+
 const severityConfig = {
   high:   { label: 'High',   classes: 'bg-gray-900 text-white border-gray-800' },
   medium: { label: 'Medium', classes: 'bg-gray-200 text-gray-700 border-gray-300' },
@@ -15,7 +17,12 @@ const typeConfig = {
 
 const confidenceColor = c => c >= 90 ? 'text-gray-900' : c >= 75 ? 'text-gray-600' : 'text-gray-400'
 
-// Derive severity from confidence if the API doesn't provide it
+const filterBtns = [
+  { key: 'all', label: 'All' },
+  { key: 'disease', label: 'Diseases' },
+  { key: 'pest', label: 'Pests' },
+]
+
 const deriveSeverity = (item) => {
   if (item.severity) return item.severity
   if (item.confidence >= 0.9) return 'high'
@@ -23,87 +30,171 @@ const deriveSeverity = (item) => {
   return 'low'
 }
 
-// Derive type from class/label if the API doesn't provide it
 const PEST_KEYWORDS = ['aphid', 'whitefly', 'mite', 'beetle', 'caterpillar', 'thrip', 'weevil', 'locust', 'pest']
 const deriveType = (item) => {
-  if (item.type) return item.type
-  const name = (item.class ?? item.label ?? item.name ?? '').toLowerCase()
+  if (item.type === 'Pest' || item.type === 'Disease') return item.type
+  const name = (item.class ?? item.label ?? item.name ?? item.type ?? '').toLowerCase()
   return PEST_KEYWORDS.some(k => name.includes(k)) ? 'Pest' : 'Disease'
 }
 
-// Normalize a raw API record into the shape this component expects
+const normalizeType = (value) => {
+  const t = String(value ?? '').toLowerCase()
+  if (t === 'pest') return 'Pest'
+  if (t === 'disease') return 'Disease'
+  return deriveType({ type: value })
+}
+
 const normalizeRecord = (raw, index) => {
-  const type       = deriveType(raw)
+  const type = normalizeType(raw.type)
   const confidence = raw.confidence != null
-      ? (raw.confidence <= 1 ? Math.round(raw.confidence * 100) : Math.round(raw.confidence))
-      : 0
+    ? (raw.confidence <= 1 ? Math.round(raw.confidence * 100) : Math.round(raw.confidence))
+    : 0
+  const timestamp = raw.timestamp ?? raw.createdAt ?? raw.detected_at ?? raw.detectedAt ?? '—'
+
   return {
-    id:         raw.id        ?? raw._id         ?? index,
-    timestamp:  raw.timestamp ?? raw.createdAt   ?? raw.detected_at ?? '—',
+    id: raw.id ?? raw._id ?? `${timestamp}-${index}`,
+    timestamp,
     type,
-    name:       raw.class     ?? raw.label        ?? raw.name        ?? 'Unknown',
+    name: raw.class ?? raw.label ?? raw.name ?? 'Unknown',
     confidence,
-    location:   raw.location  ?? raw.field        ?? (raw.fieldId ? `Field ${raw.fieldId}` : '—'),
-    severity:   deriveSeverity({ ...raw, confidence: raw.confidence ?? confidence / 100 }),
+    location: raw.location ?? raw.field ?? raw.fieldName ?? (raw.fieldId ? `Field ${raw.fieldId}` : '—'),
+    severity: deriveSeverity({ ...raw, confidence: raw.confidence ?? confidence / 100 }),
+  }
+}
+
+const loadSharedDetections = () => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SHARED_DETECTIONS_KEY) || '[]')
+    return Array.isArray(raw) ? raw : []
+  } catch {
+    return []
   }
 }
 
 export default function AlarmLog() {
   const [detectionLog, setDetectionLog] = useState([])
-  const [filter,       setFilter]       = useState('all')
-  const [loading,      setLoading]      = useState(true)
-  const [error,        setError]        = useState(null)
-  const [lastUpdated,  setLastUpdated]  = useState(null)
+  const [filter, setFilter] = useState('all')
+  const [dateFilter, setDateFilter] = useState('all_time')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [lastUpdated, setLastUpdated] = useState(null)
 
   const fetchAlarms = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      // Try the dedicated alarms/detections history endpoint first
-      const res = await api.get('/api/alarms')
-      const raw = res.data?.data ?? res.data ?? []
-      setDetectionLog(Array.isArray(raw) ? raw.map(normalizeRecord) : [])
-      setLastUpdated(new Date())
-    } catch (err) {
-      // Fallback: try the general detections endpoint
+      const shared = loadSharedDetections().map((item, idx) => normalizeRecord(item, idx))
+
+      let apiRows = []
       try {
-        const res = await api.get('/api/detections')
+        const res = await api.get('/api/alarms')
         const raw = res.data?.data ?? res.data ?? []
-        setDetectionLog(Array.isArray(raw) ? raw.map(normalizeRecord) : [])
-        setLastUpdated(new Date())
-      } catch (fallbackErr) {
-        console.error('Failed to fetch alarm log:', fallbackErr)
+        apiRows = Array.isArray(raw) ? raw.map(normalizeRecord) : []
+      } catch {
+        try {
+          const res = await api.get('/api/detections')
+          const raw = res.data?.data ?? res.data ?? []
+          apiRows = Array.isArray(raw) ? raw.map(normalizeRecord) : []
+        } catch {
+          apiRows = []
+        }
+      }
+
+      const merged = [...shared, ...apiRows]
+      const deduped = Array.from(new Map(merged.map(r => [String(r.id), r])).values())
+      deduped.sort((a, b) => {
+        const ta = new Date(a.timestamp).getTime() || 0
+        const tb = new Date(b.timestamp).getTime() || 0
+        return tb - ta
+      })
+
+      setDetectionLog(deduped)
+      if (deduped.length === 0) {
         setError('Could not load detection records. Make sure the API server is running.')
       }
+      setLastUpdated(new Date())
     } finally {
       setLoading(false)
     }
   }, [])
 
-  // Initial fetch
   useEffect(() => { fetchAlarms() }, [fetchAlarms])
 
-  // Auto-refresh every 30 seconds
   useEffect(() => {
-    const interval = setInterval(fetchAlarms, 30_000)
-    return () => clearInterval(interval)
+    const interval = setInterval(fetchAlarms, 5000)
+    const onStorage = (e) => {
+      if (e.key === SHARED_DETECTIONS_KEY) fetchAlarms()
+    }
+    window.addEventListener('storage', onStorage)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('storage', onStorage)
+    }
   }, [fetchAlarms])
 
-  const filteredLog = filter === 'all'
+  const parseTimestamp = (value) => {
+    if (!value || value === '—') return null
+    const parsed = new Date(value)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+
+  const getDateRange = (key) => {
+    const now = new Date()
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+
+    if (key === 'today') {
+      return { start: startOfToday, end: now }
+    }
+    if (key === 'last_7_days') {
+      const start = new Date(startOfToday)
+      start.setDate(start.getDate() - 6)
+      return { start, end: now }
+    }
+    if (key === 'last_30_days') {
+      const start = new Date(startOfToday)
+      start.setDate(start.getDate() - 29)
+      return { start, end: now }
+    }
+    if (key === 'this_month') {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1)
+      return { start, end: now }
+    }
+    if (key === 'last_month') {
+      const start = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+      const end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999)
+      return { start, end }
+    }
+    return null
+  }
+
+  const typeFilteredLog = filter === 'all'
       ? detectionLog
       : detectionLog.filter(item => item.type.toLowerCase() === filter)
 
-  const filterBtns = [
-    { key: 'all',     label: 'All' },
-    { key: 'disease', label: 'Diseases' },
-    { key: 'pest',    label: 'Pests' },
+  const filteredLog = dateFilter === 'all_time'
+      ? typeFilteredLog
+      : typeFilteredLog.filter(item => {
+        const ts = parseTimestamp(item.timestamp)
+        if (!ts) return false
+        const range = getDateRange(dateFilter)
+        if (!range) return true
+        return ts >= range.start && ts <= range.end
+      })
+
+  const dateFilterOptions = [
+    { key: 'all_time', label: 'All time' },
+    { key: 'today', label: 'Today' },
+    { key: 'last_7_days', label: 'Last 7 days' },
+    { key: 'last_30_days', label: 'Last 30 days' },
+    { key: 'this_month', label: 'This month' },
+    { key: 'last_month', label: 'Last month' },
   ]
 
   const stats = [
-    { label: 'Total',         value: detectionLog.length },
-    { label: 'Diseases',      value: detectionLog.filter(d => d.type === 'Disease').length },
-    { label: 'Pests',         value: detectionLog.filter(d => d.type === 'Pest').length },
-    { label: 'High Severity', value: detectionLog.filter(d => d.severity === 'high').length },
+    { label: 'Total',         value: filteredLog.length },
+    { label: 'Diseases',      value: filteredLog.filter(d => d.type === 'Disease').length },
+    { label: 'Pests',         value: filteredLog.filter(d => d.type === 'Pest').length },
+    { label: 'High Severity', value: filteredLog.filter(d => d.severity === 'high').length },
   ]
 
   return (
@@ -166,7 +257,7 @@ export default function AlarmLog() {
           </div>
 
           {/* Filter */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {filterBtns.map(({ key, label }) => (
                 <button
                     key={key}
@@ -180,6 +271,24 @@ export default function AlarmLog() {
                   {label}
                 </button>
             ))}
+            <select
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value)}
+              className="px-3 py-2 rounded-xl text-sm font-semibold bg-white text-gray-600 border border-gray-100 hover:border-gray-200"
+            >
+              {dateFilterOptions.map(opt => (
+                <option key={opt.key} value={opt.key}>{opt.label}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => {
+                setFilter('all')
+                setDateFilter('all_time')
+              }}
+              className="px-3 py-2 rounded-xl text-sm font-semibold bg-white text-gray-500 border border-gray-100 hover:text-gray-800 hover:border-gray-200"
+            >
+              Reset filters
+            </button>
           </div>
 
           {/* Loading skeleton */}
@@ -307,3 +416,4 @@ export default function AlarmLog() {
       </div>
   )
 }
+

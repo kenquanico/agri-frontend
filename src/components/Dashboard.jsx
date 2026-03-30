@@ -1,28 +1,47 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { PlayCircle, Upload, Bell, FileText, MapPin, TrendingUp, TrendingDown, ChevronDown } from 'lucide-react'
-import { activityStore } from '../store/activitystore'
+import { PlayCircle, Upload, Bell, FileText, MapPin, TrendingUp, TrendingDown, ChevronDown, X, HelpCircle } from 'lucide-react'
 
-const PAGE_SIZE = 10
-const TIME_RANGES = ['This week', 'Last week', 'Last month', 'Other']
+const formatDateShort = (date) => date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+const formatMonthYear = (date) => date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
 
-// ─── Pest / disease options ───────────────────────────────────────────────────
-const PEST_OPTIONS = [
-  'All Detections',
-  'Brown Planthopper',
-  'Rice Blast',
-  'Leaf Folder',
-  'Stem Borer',
-  'Rice Tungro',
-  'Bacterial Blight',
-]
+const buildTimeRanges = () => {
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const day = today.getDay()
+  const diffToMonday = (day + 6) % 7
 
-// ─── Graph raw data ───────────────────────────────────────────────────────────
+  const thisWeekStart = new Date(today)
+  thisWeekStart.setDate(today.getDate() - diffToMonday)
+  const thisWeekEnd = new Date(thisWeekStart)
+  thisWeekEnd.setDate(thisWeekStart.getDate() + 6)
+
+  const lastWeekStart = new Date(thisWeekStart)
+  lastWeekStart.setDate(thisWeekStart.getDate() - 7)
+  const lastWeekEnd = new Date(thisWeekStart)
+  lastWeekEnd.setDate(thisWeekStart.getDate() - 1)
+
+  const lastMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 1)
+  const sixMonthsStart = new Date(today.getFullYear(), today.getMonth() - 5, 1)
+  const sixMonthsEnd = new Date(today.getFullYear(), today.getMonth(), 1)
+
+  return [
+    { label: 'This week', date: `${formatDateShort(thisWeekStart)} - ${formatDateShort(thisWeekEnd)}`, days: '7 days' },
+    { label: 'Last week', date: `${formatDateShort(lastWeekStart)} - ${formatDateShort(lastWeekEnd)}`, days: '7 days' },
+    { label: 'Last month', date: formatMonthYear(lastMonthDate), days: '1 month' },
+    { label: 'Other', date: `${sixMonthsStart.toLocaleDateString('en-US', { month: 'short' })} - ${sixMonthsEnd.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`, days: '6 months' },
+  ]
+}
+
+const PEST_ONLY   = ['Brown Planthopper', 'Leaf Folder', 'Stem Borer']
+const DISEASE_ONLY = ['Rice Blast', 'Rice Tungro', 'Bacterial Blight']
+const ALL_LIST    = [...PEST_ONLY, ...DISEASE_ONLY]
+
 const GRAPH_DATA = {
   'This week': {
-    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    labels: ['March 1', 'March 2', 'March 3', 'March 4', 'March 5', 'March 6', 'March 7'],
     sublabel: 'Day',
     series: {
-      'All Detections':    [8, 14, 12, 22, 18, 28, 20],
+      'All':               [8, 14, 12, 22, 18, 28, 20],
       'Brown Planthopper': [2,  5,  3,  8,  6, 10,  7],
       'Rice Blast':        [1,  2,  4,  3,  5,  4,  6],
       'Leaf Folder':       [0,  1,  1,  2,  3,  2,  4],
@@ -32,10 +51,10 @@ const GRAPH_DATA = {
     },
   },
   'Last week': {
-    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    labels: ['Feb 22', 'Feb 23', 'Feb 24', 'Feb 25', 'Feb 26', 'Feb 27', 'Feb 28'],
     sublabel: 'Day',
     series: {
-      'All Detections':    [12,  8, 16,  6, 18, 14, 24],
+      'All':               [12,  8, 16,  6, 18, 14, 24],
       'Brown Planthopper': [ 4,  3,  6,  2,  7,  5,  9],
       'Rice Blast':        [ 2,  1,  3,  1,  4,  3,  5],
       'Leaf Folder':       [ 1,  0,  2,  1,  2,  1,  3],
@@ -48,7 +67,7 @@ const GRAPH_DATA = {
     labels: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
     sublabel: 'Week',
     series: {
-      'All Detections':    [42, 58, 38, 52],
+      'All':               [42, 58, 38, 52],
       'Brown Planthopper': [18, 24, 15, 20],
       'Rice Blast':        [ 8, 11,  6,  9],
       'Leaf Folder':       [ 3,  5,  4,  7],
@@ -61,7 +80,7 @@ const GRAPH_DATA = {
     labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
     sublabel: 'Month',
     series: {
-      'All Detections':    [28, 38, 24, 50, 34, 44],
+      'All':               [28, 38, 24, 50, 34, 44],
       'Brown Planthopper': [10, 14,  9, 18, 12, 16],
       'Rice Blast':        [ 4,  6,  3,  8,  5,  9],
       'Leaf Folder':       [ 2,  3,  2,  4,  3,  5],
@@ -72,7 +91,6 @@ const GRAPH_DATA = {
   },
 }
 
-// ─── Severity config ──────────────────────────────────────────────────────────
 const SEVERITY_CONFIG = [
   { key: 'Critical', color: '#ef4444', dashed: false },
   { key: 'High',     color: '#f97316', dashed: false },
@@ -80,7 +98,6 @@ const SEVERITY_CONFIG = [
   { key: 'Low',      color: '#22c55e', dashed: true  },
 ]
 
-// Deterministic per-index ratios so each severity line looks distinct
 const RATIO = {
   Critical: [0.12, 0.18, 0.10, 0.20, 0.15, 0.22, 0.08],
   High:     [0.25, 0.22, 0.30, 0.20, 0.28, 0.24, 0.26],
@@ -88,8 +105,90 @@ const RATIO = {
   Low:      [0.25, 0.25, 0.20, 0.28, 0.21, 0.24, 0.26],
 }
 
+const METRICS_HELP = [
+  {
+    group: 'Detection Overview',
+    items: [
+      { name: 'Detections',    desc: 'Total number of pest or disease instances identified across all monitored fields in the selected period.' },
+      { name: 'Active Alerts', desc: 'Alerts currently flagged as unresolved that require immediate attention or field inspection.' },
+    ],
+  },
+  {
+    group: 'Crop Health',
+    items: [
+      { name: 'Crop Loss',     desc: 'Estimated percentage of yield affected by confirmed pest and disease detections, based on severity and field area.' },
+      { name: 'Healthy Crops', desc: 'Proportion of monitored crop area with no active detections or alerts — your baseline field health score.' },
+    ],
+  },
+  {
+    group: 'Severity Levels',
+    items: [
+      { name: 'Critical', desc: 'Immediate intervention required. Spread is rapid and yield loss is imminent without treatment.' },
+      { name: 'High',     desc: 'Significant infestation detected. Schedule treatment within 24–48 hours to prevent escalation.' },
+      { name: 'Moderate', desc: 'Manageable levels present. Monitor closely and prepare treatment plan as a precaution.' },
+      { name: 'Low',      desc: 'Early signs detected. Continue routine monitoring; no immediate action required.' },
+    ],
+  },
+  {
+    group: 'Trend Indicators',
+    items: [
+      { name: '% Change', desc: 'Comparison against the equivalent prior period. Increases in detections or crop loss are shown in red.' },
+    ],
+  },
+]
+
+/* ─── Help Modal ─── */
+function MetricsHelpModal({ open, onClose }) {
+  useEffect(() => {
+    if (!open) return
+    const h = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [open, onClose])
+  if (!open) return null
+  return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+           style={{ background: 'rgba(15,23,42,0.35)', backdropFilter: 'blur(6px)' }}
+           onClick={onClose}>
+        <div onClick={e => e.stopPropagation()}
+             style={{ background: 'rgba(255,255,255,0.97)', border: '1px solid rgba(226,232,240,0.8)', borderRadius: 20, boxShadow: '0 32px 80px rgba(0,0,0,0.16)', width: '100%', maxWidth: 520, maxHeight: '82vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+          {/* Modal header */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 24px 18px', borderBottom: '1px solid #f1f5f9', flexShrink: 0 }}>
+            <div>
+              <p style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#0f172a', letterSpacing: '-0.02em' }}>Key Metrics Guide</p>
+              <p style={{ margin: 0, fontSize: 12, color: '#94a3b8', fontWeight: 500, marginTop: 3 }}>What each indicator means for your fields</p>
+            </div>
+            <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 10, border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>
+              <X size={15} />
+            </button>
+          </div>
+
+          {/* Modal body */}
+          <div style={{ overflowY: 'auto', padding: '20px 24px 24px', display: 'flex', flexDirection: 'column', gap: 24, scrollbarWidth: 'none' }}>
+            {METRICS_HELP.map(group => (
+                <div key={group.group}>
+                  <p style={{ margin: 0, marginBottom: 12, fontSize: 11, fontWeight: 800, color: '#64748b', letterSpacing: '0.1em', textTransform: 'uppercase' }}>{group.group}</p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {group.items.map(item => (
+                        <div key={item.name}>
+                          <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>{item.name}</p>
+                          <p style={{ margin: 0, fontSize: 13, color: '#64748b', lineHeight: 1.6 }}>{item.desc}</p>
+                        </div>
+                    ))}
+                  </div>
+                </div>
+            ))}
+          </div>
+        </div>
+      </div>
+  )
+}
+
+/* ─── Graph helpers ─── */
 function buildSeverityData(data, pest) {
-  const vals = data.series[pest] ?? data.series['All Detections']
+  const key = data.series[pest] ? pest : 'All'
+  const vals = data.series[key]
   const out = {}
   SEVERITY_CONFIG.forEach(s => {
     out[s.key] = vals.map((v, i) => Math.max(0, Math.round(v * RATIO[s.key][i % 7])))
@@ -97,22 +196,225 @@ function buildSeverityData(data, pest) {
   return out
 }
 
-// ─── Doodle SVG Graph ─────────────────────────────────────────────────────────
-function DoodleGraph({ range, pest }) {
-  const data = GRAPH_DATA[range]
-  const W = 880, H = 210, PX = 30, PY = 18
+function measurePathLength(d) {
+  try {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    svg.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none'
+    document.body.appendChild(svg)
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    path.setAttribute('d', d)
+    svg.appendChild(path)
+    const len = path.getTotalLength()
+    document.body.removeChild(svg)
+    return len
+  } catch { return 1000 }
+}
 
-  const [hoverIdx, setHoverIdx]     = useState(null)
+function AnimatedLine({ d, color, dashed, delay = 0, animKey }) {
+  const [len, setLen] = useState(null)
+  const [animating, setAnimating] = useState(false)
+  useEffect(() => {
+    const measured = measurePathLength(d)
+    setLen(measured)
+    setAnimating(false)
+    const raf = requestAnimationFrame(() => requestAnimationFrame(() => setAnimating(true)))
+    return () => cancelAnimationFrame(raf)
+  }, [animKey])
+  if (len === null) return null
+  return (
+      <path d={d} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+            strokeDasharray={dashed ? undefined : `${len} ${len}`}
+            strokeDashoffset={dashed ? undefined : (animating ? 0 : len)}
+            opacity="0.95"
+            style={dashed
+                ? { strokeDasharray: '5 4', strokeDashoffset: animating ? 0 : len, transition: animating ? `stroke-dashoffset 0.9s cubic-bezier(0.4,0,0.2,1) ${delay}s` : 'none' }
+                : { transition: animating ? `stroke-dashoffset 0.9s cubic-bezier(0.4,0,0.2,1) ${delay}s` : 'none' }
+            }
+      />
+  )
+}
+
+function AnimatedFill({ d, pts, color, H, PY, delay = 0, animKey }) {
+  const [visible, setVisible] = useState(false)
+  useEffect(() => {
+    setVisible(false)
+    const t = setTimeout(() => setVisible(true), delay * 1000 + 200)
+    return () => clearTimeout(t)
+  }, [animKey, delay])
+  const fill = `${d} L ${pts[pts.length - 1][0]} ${H - PY} L ${pts[0][0]} ${H - PY} Z`
+  return <path d={fill} fill={`url(#g-${color.replace('#', '')})`} style={{ opacity: visible ? 1 : 0, transition: 'opacity 0.6s ease' }} />
+}
+
+function FloatingTooltip({ hoverPos, data, hoverIdx, severityData, activeKeys, growthRate }) {
+  const [pos, setPos] = useState({ x: 0, y: 0 })
+  const [visible, setVisible] = useState(false)
+  const rafRef = useRef(null)
+  const targetRef = useRef({ x: 0, y: 0 })
+
+  useEffect(() => {
+    if (hoverPos.idx === null) { setVisible(false); return }
+    setVisible(true)
+    targetRef.current = { x: hoverPos.x, y: hoverPos.y }
+    const loop = () => {
+      setPos(prev => {
+        const dx = targetRef.current.x - prev.x
+        const dy = targetRef.current.y - prev.y
+        if (Math.abs(dx) < 0.4 && Math.abs(dy) < 0.4) return targetRef.current
+        return { x: prev.x + dx * 0.18, y: prev.y + dy * 0.18 }
+      })
+      rafRef.current = requestAnimationFrame(loop)
+    }
+    rafRef.current = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [hoverPos.idx, hoverPos.x, hoverPos.y])
+
+  if (!visible || hoverIdx === null) return null
+  const flipLeft = pos.x > window.innerWidth * 0.62
+  const label = data.labels[hoverIdx]
+
+  return (
+      <div className="fixed pointer-events-none z-50" style={{ left: pos.x, top: pos.y, transform: `translateY(-50%) ${flipLeft ? 'translateX(calc(-100% - 20px))' : 'translateX(20px)'}`, opacity: visible ? 1 : 0, transition: 'opacity 0.18s ease' }}>
+        <div style={{ background: 'rgba(248,250,252,0.78)', backdropFilter: 'blur(36px) saturate(220%)', border: '1px solid rgba(255,255,255,0.7)', borderRadius: 18, boxShadow: '0 20px 60px rgba(0,0,0,0.12)', padding: '14px 16px', minWidth: 180 }}>
+          <div style={{ marginBottom: 10, paddingBottom: 9, borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+            <p style={{ fontSize: 12, fontWeight: 700, color: '#0f172a', margin: 0 }}>{label}</p>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {SEVERITY_CONFIG.map(s => {
+              if (!activeKeys.has(s.key)) return null
+              const val  = severityData[s.key][hoverIdx]
+              const rate = growthRate(severityData[s.key], hoverIdx)
+              const isUp = rate !== null && Number(rate) >= 0
+              return (
+                  <div key={s.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.color, flexShrink: 0, display: 'block' }} />
+                      <span style={{ fontSize: 11, color: '#475569', fontWeight: 500 }}>{s.key}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', fontVariantNumeric: 'tabular-nums' }}>{val}</span>
+                      {rate !== null && (
+                          <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 100, color: isUp ? '#dc2626' : '#16a34a' }}>
+                      {isUp ? '↑' : '↓'}{Math.abs(rate)}%
+                    </span>
+                      )}
+                    </div>
+                  </div>
+              )
+            })}
+          </div>
+          {hoverIdx > 0 && (
+              <p style={{ fontSize: 9, color: 'rgba(148,163,184,0.65)', marginTop: 10, paddingTop: 9, borderTop: '1px solid rgba(0,0,0,0.05)', marginBottom: 0, fontWeight: 500 }}>
+                % change vs previous {data.sublabel.toLowerCase()}
+              </p>
+          )}
+        </div>
+      </div>
+  )
+}
+
+/* ─── Ghost Dropdown ─── */
+function GhostDropdown({ label, options, value, onChange, open, onToggle, onClose }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose() }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [open, onClose])
+
+  return (
+      <div ref={ref} className="relative" onClick={e => e.stopPropagation()}>
+        <button
+            onClick={onToggle}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', cursor: 'pointer', padding: '5px 8px', borderRadius: 8, transition: 'background 0.15s ease', color: '#334155' }}
+            onMouseEnter={e => e.currentTarget.style.background = '#f1f5f9'}
+            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+        >
+          <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</span>
+          <ChevronDown size={12} style={{ color: '#94a3b8', flexShrink: 0, transform: open ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s ease' }} />
+        </button>
+        {open && (
+            <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 40, background: 'white', border: '1px solid #f1f5f9', borderRadius: 16, boxShadow: '0 8px 32px rgba(0,0,0,0.10)', padding: '6px', minWidth: 180 }}>
+              {options.map(opt => (
+                  <button key={opt}
+                          onClick={() => { onChange(opt); onClose() }}
+                          style={{ width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 13, fontWeight: 500, cursor: 'pointer', border: 'none', borderRadius: 10, background: value === opt ? '#f0fdf4' : 'transparent', color: value === opt ? '#15803d' : '#475569', transition: 'background 0.12s ease', display: 'block' }}
+                          onMouseEnter={e => { if (value !== opt) e.currentTarget.style.background = '#f8fafc' }}
+                          onMouseLeave={e => { if (value !== opt) e.currentTarget.style.background = 'transparent' }}
+                  >{opt}</button>
+              ))}
+            </div>
+        )}
+      </div>
+  )
+}
+
+/* ─── Date Range Dropdown ─── */
+function DateRangeDropdown({ range, onChange, open, onToggle, onClose }) {
+  const ranges = buildTimeRanges()
+  const current = ranges.find(r => r.label === range) || ranges[0]
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose() }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [open, onClose])
+
+  return (
+      <div ref={ref} className="relative" onClick={e => e.stopPropagation()}>
+        <button
+            onClick={onToggle}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'transparent', border: 'none', cursor: 'pointer', padding: '5px 8px', borderRadius: 8, transition: 'background 0.15s ease' }}
+            onMouseEnter={e => e.currentTarget.style.background = '#f1f5f9'}
+            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+        >
+          <div style={{ textAlign: 'right' }}>
+            <p style={{ fontSize: 13, fontWeight: 600, color: '#334155', margin: 0, whiteSpace: 'nowrap', lineHeight: 1.2 }}>{current.date}</p>
+            <p style={{ fontSize: 10, color: '#94a3b8', margin: 0, marginTop: 2, fontWeight: 500, lineHeight: 1 }}>{current.days}</p>
+          </div>
+          <ChevronDown size={12} style={{ color: '#94a3b8', flexShrink: 0, transform: open ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s ease' }} />
+        </button>
+        {open && (
+            <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 40, background: 'white', border: '1px solid #f1f5f9', borderRadius: 16, boxShadow: '0 8px 32px rgba(0,0,0,0.10)', padding: '6px', minWidth: 200 }}>
+              {ranges.map(r => (
+                  <button key={r.label}
+                          onClick={() => { onChange(r.label); onClose() }}
+                          style={{ width: '100%', textAlign: 'left', padding: '9px 12px', fontSize: 13, cursor: 'pointer', border: 'none', borderRadius: 10, background: range === r.label ? '#f0fdf4' : 'transparent', color: range === r.label ? '#15803d' : '#475569', transition: 'background 0.12s ease', display: 'flex', flexDirection: 'column', gap: 2 }}
+                          onMouseEnter={e => { if (range !== r.label) e.currentTarget.style.background = '#f8fafc' }}
+                          onMouseLeave={e => { if (range !== r.label) e.currentTarget.style.background = 'transparent' }}
+                  >
+                    <span style={{ fontWeight: 600, fontSize: 12 }}>{r.label}</span>
+                    <span style={{ fontSize: 10, color: '#94a3b8' }}>{r.date}</span>
+                  </button>
+              ))}
+            </div>
+        )}
+      </div>
+  )
+}
+
+/* ─── Graph ─── */
+function DoodleGraph({ range, pest, activeView, setActiveView, pestValue, diseaseValue, setPestValue, setDiseaseValue }) {
+  const data = GRAPH_DATA[range]
+  const W = 900, H = 270, PX_L = 12, PX_R = 42, PY = 20
+
+  const [hoverPos, setHoverPos] = useState({ idx: null, x: 0, y: 0 })
   const [activeKeys, setActiveKeys] = useState(() => new Set(SEVERITY_CONFIG.map(s => s.key)))
+  const [pestOpen, setPestOpen]     = useState(false)
+  const [diseaseOpen, setDiseaseOpen] = useState(false)
   const svgRef = useRef(null)
 
+  const animKey = `${range}__${pest}`
   const severityData = buildSeverityData(data, pest)
-  const allVals      = SEVERITY_CONFIG.flatMap(s => activeKeys.has(s.key) ? severityData[s.key] : [])
-  const globalMax    = Math.max(...allVals, 1)
+  const allVals = SEVERITY_CONFIG.flatMap(s => activeKeys.has(s.key) ? severityData[s.key] : [])
+  const globalMax = Math.max(...allVals, 1)
+  const plotW = W - PX_L - PX_R
 
   function buildPts(key) {
     return severityData[key].map((v, i) => [
-      PX + (i / (severityData[key].length - 1)) * (W - PX * 2),
+      PX_L + (i / (severityData[key].length - 1)) * plotW,
       PY + (1 - v / globalMax) * (H - PY * 2),
     ])
   }
@@ -132,18 +434,18 @@ function DoodleGraph({ range, pest }) {
   }
 
   const labelCount = data.labels.length
-  const colW       = (W - PX * 2) / Math.max(labelCount - 1, 1)
+  const colW = plotW / Math.max(labelCount - 1, 1)
 
   const handleMouseMove = useCallback((e) => {
     if (!svgRef.current) return
     const rect = svgRef.current.getBoundingClientRect()
     const relX = (e.clientX - rect.left) / rect.width * W
-    setHoverIdx(Math.max(0, Math.min(labelCount - 1, Math.round((relX - PX) / colW))))
+    const idx  = Math.max(0, Math.min(labelCount - 1, Math.round((relX - PX_L) / colW)))
+    setHoverPos({ idx, x: e.clientX, y: e.clientY })
   }, [colW, labelCount])
 
-  const tooltipX = hoverIdx !== null
-      ? PX + (hoverIdx / (labelCount - 1)) * (W - PX * 2)
-      : null
+  const hoverIdx = hoverPos.idx
+  const tooltipX = hoverIdx !== null ? PX_L + (hoverIdx / (labelCount - 1)) * plotW : null
 
   const toggleSeries = (key) => {
     setActiveKeys(prev => {
@@ -155,463 +457,264 @@ function DoodleGraph({ range, pest }) {
   }
 
   return (
-      <div className="w-full select-none">
-        {/* Severity toggles — minimal line+label style */}
-        <div className="flex items-center gap-5 px-1 mb-5 flex-wrap">
-          <span className="text-[10px] font-semibold text-gray-300 uppercase tracking-widest">Severity</span>
-          {SEVERITY_CONFIG.map(s => {
-            const active = activeKeys.has(s.key)
-            return (
-                <button key={s.key} onClick={() => toggleSeries(s.key)}
-                        className="flex items-center gap-1.5 transition-opacity"
-                        style={{ opacity: active ? 1 : 0.25 }}
-                >
-                  <svg width="18" height="6">
-                    <line x1="0" y1="3" x2="18" y2="3"
-                          stroke={s.color} strokeWidth="1.75"
-                          strokeDasharray={s.dashed ? '4 3' : undefined}
-                          strokeLinecap="round" />
-                  </svg>
-                  <span className="text-[11px] font-semibold text-gray-500">{s.key}</span>
-                </button>
-            )
-          })}
-        </div>
+      <div className="flex flex-col flex-1 min-w-0 h-full">
+        {/* Top controls */}
+        <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
+          <div className="flex items-center gap-1">
+            {/* All */}
+            <button
+                onClick={e => { e.stopPropagation(); setActiveView('All') }}
+                style={{ padding: '5px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700, transition: 'background 0.15s ease', background: activeView === 'All' ? '#f1f5f9' : 'transparent', color: activeView === 'All' ? '#1e293b' : '#94a3b8' }}
+                onMouseEnter={e => { if (activeView !== 'All') e.currentTarget.style.background = '#f8fafc' }}
+                onMouseLeave={e => { if (activeView !== 'All') e.currentTarget.style.background = 'transparent' }}
+            >All</button>
 
-        {/* SVG canvas */}
-        <div className="relative">
-          <svg ref={svgRef}
-               viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
-               className="w-full cursor-crosshair" style={{ height: 240 }}
-               onMouseMove={handleMouseMove} onMouseLeave={() => setHoverIdx(null)}
-          >
-            <defs>
-              <filter id="doodle">
-                <feTurbulence type="fractalNoise" baseFrequency="0.5" numOctaves="1" result="n" />
-                <feDisplacementMap in="SourceGraphic" in2="n" scale="0.5" xChannelSelector="R" yChannelSelector="G" />
-              </filter>
-              {SEVERITY_CONFIG.map(s => (
-                  <linearGradient key={s.key} id={`g-${s.key}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={s.color} stopOpacity={activeKeys.has(s.key) ? '0.06' : '0'} />
-                    <stop offset="100%" stopColor={s.color} stopOpacity="0" />
-                  </linearGradient>
-              ))}
-            </defs>
-
-            {/* Grid lines + Y labels */}
-            {[0, 0.25, 0.5, 0.75, 1].map(t => {
-              const y   = PY + t * (H - PY * 2)
-              const val = Math.round(globalMax * (1 - t))
-              return (
-                  <g key={t}>
-                    <line x1={PX} x2={W - PX} y1={y} y2={y}
-                          stroke="#f1f5f9" strokeWidth="1" strokeDasharray="3 6" />
-                    <text x={PX - 7} y={y + 3.5} textAnchor="end"
-                          fontSize="8" fill="#d1d5db" fontFamily="monospace">{val}</text>
-                  </g>
-              )
-            })}
-
-            {/* X-axis labels */}
-            {data.labels.map((l, i) => (
-                <text key={l}
-                      x={PX + (i / (labelCount - 1)) * (W - PX * 2)} y={H - 2}
-                      textAnchor="middle" fontSize="9" fill="#9ca3af"
-                      fontFamily="monospace" fontWeight="500"
-                >{l}</text>
-            ))}
-
-            {/* Hover crosshair */}
-            {hoverIdx !== null && (
-                <line x1={tooltipX} x2={tooltipX} y1={PY} y2={H - PY}
-                      stroke="#e5e7eb" strokeWidth="1.5" />
-            )}
-
-            {/* Series lines */}
-            {SEVERITY_CONFIG.map(s => {
-              if (!activeKeys.has(s.key)) return null
-              const pts  = buildPts(s.key)
-              const pd   = smoothD(pts)
-              const fill = `${pd} L ${pts[pts.length - 1][0]} ${H - PY} L ${pts[0][0]} ${H - PY} Z`
-              return (
-                  <g key={s.key} style={{ filter: 'url(#doodle)' }}>
-                    <path d={fill} fill={`url(#g-${s.key})`} />
-                    <path d={pd} fill="none" stroke={s.color} strokeWidth="1.8"
-                          strokeLinecap="round" strokeLinejoin="round"
-                          strokeDasharray={s.dashed ? '5 4' : undefined} opacity="0.9"
-                    />
-                    {hoverIdx !== null && pts[hoverIdx] && (
-                        <>
-                          <circle cx={pts[hoverIdx][0]} cy={pts[hoverIdx][1]} r="4"
-                                  fill="white" stroke={s.color} strokeWidth="1.5" />
-                          <circle cx={pts[hoverIdx][0]} cy={pts[hoverIdx][1]} r="1.8"
-                                  fill={s.color} />
-                        </>
-                    )}
-                  </g>
-              )
-            })}
-          </svg>
-
-          {/* Tooltip — white card, fully light */}
-          {hoverIdx !== null && (() => {
-            const label = data.labels[hoverIdx]
-            return (
-                <div className="absolute top-2 pointer-events-none z-30"
-                     style={{
-                       left: `${(tooltipX / W) * 100}%`,
-                       transform: hoverIdx > labelCount * 0.6 ? 'translateX(-108%)' : 'translateX(10px)',
-                     }}
-                >
-                  <div className="bg-white border border-gray-100 rounded-xl shadow-sm px-3.5 py-3 min-w-[170px]">
-                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">
-                      {label} · {data.sublabel}
-                    </p>
-                    {SEVERITY_CONFIG.map(s => {
-                      if (!activeKeys.has(s.key)) return null
-                      const val  = severityData[s.key][hoverIdx]
-                      const rate = growthRate(severityData[s.key], hoverIdx)
-                      const isUp = rate !== null && Number(rate) >= 0
-                      return (
-                          <div key={s.key} className="flex items-center justify-between gap-3 mb-1.5 last:mb-0">
-                            <div className="flex items-center gap-1.5">
-                              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: s.color }} />
-                              <span className="text-[11px] text-gray-500">{s.key}</span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-[12px] font-bold text-gray-800 tabular-nums">{val}</span>
-                              {rate !== null && (
-                                  <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full"
-                                        style={{
-                                          color:      isUp ? '#ef4444' : '#16a34a',
-                                          background: isUp ? '#fef2f2' : '#f0fdf4',
-                                        }}
-                                  >
-                            {isUp ? '↑' : '↓'}{Math.abs(rate)}%
-                          </span>
-                              )}
-                            </div>
-                          </div>
-                      )
-                    })}
-                    {hoverIdx > 0 && (
-                        <p className="text-[9px] text-gray-300 mt-2 pt-2 border-t border-gray-50">
-                          % change vs previous {data.sublabel.toLowerCase()}
-                        </p>
-                    )}
-                  </div>
-                </div>
-            )
-          })()}
-        </div>
-      </div>
-  )
-}
-
-// ─── Stat Card ────────────────────────────────────────────────────────────────
-function StatCard({ title, value, change, changeLabel }) {
-  const hasChange  = change !== null && change !== undefined
-  const isPositive = hasChange && change >= 0
-  return (
-      <div className="bg-white rounded-2xl border border-gray-100 p-8 shadow-sm">
-        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-6">{title}</p>
-        <div className="flex items-end gap-2 mb-6">
-          <p className="text-5xl font-bold text-gray-900 tracking-tight leading-none">{value}</p>
-          {hasChange && (
-              <div className={`flex items-center gap-1 mb-0.5 ${isPositive ? 'text-green-600' : 'text-red-500'}`}>
-                {isPositive ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
-                <span className="text-b font-semibold">{isPositive ? '+' : ''}{change}%</span>
-              </div>
-          )}
-        </div>
-        {hasChange
-            ? <p className="text-base text-gray-300">{changeLabel || 'from last week'}</p>
-            : <p className="text-base text-gray-300">No previous data yet</p>
-        }
-      </div>
-  )
-}
-
-// ─── Action Card ──────────────────────────────────────────────────────────────
-function ActionCard({ icon, title, onClick }) {
-  return (
-      <button onClick={onClick}
-              className="bg-white rounded-2xl border border-dashed border-gray-200 p-5 hover:border-green-400 hover:bg-green-50/30 transition-all w-full text-left group"
-      >
-        <div className="mb-3 text-green-600 opacity-70 group-hover:opacity-100 transition-opacity">{icon}</div>
-        <p className="text-sm font-semibold text-gray-700 group-hover:text-gray-900 transition-colors leading-snug">{title}</p>
-      </button>
-  )
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function relativeTime(epochMs) {
-  const diffMs  = Date.now() - epochMs
-  const diffMin = Math.floor(diffMs / 60_000)
-  const diffHr  = Math.floor(diffMin / 60)
-  const diffDay = Math.floor(diffHr / 24)
-  if (diffMin < 1)   return 'Just now'
-  if (diffMin < 60)  return `${diffMin}m ago`
-  if (diffHr  < 24)  return `${diffHr}h ago`
-  if (diffDay === 1) return 'Yesterday'
-  return `${diffDay} days ago`
-}
-
-function groupByDay(entries) {
-  const groups = {}
-  entries.forEach(e => {
-    const d         = new Date(e.epochMs)
-    const now       = new Date()
-    const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1)
-    const label =
-        d.toDateString() === now.toDateString()       ? 'Today'     :
-            d.toDateString() === yesterday.toDateString() ? 'Yesterday' :
-                d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })
-    if (!groups[label]) groups[label] = []
-    groups[label].push(e)
-  })
-  return groups
-}
-
-function confBadge(conf) {
-  const pct = Math.round(conf * 100)
-  if (pct >= 80) return { bg: 'bg-green-50 border-green-100', text: 'text-green-600' }
-  if (pct >= 60) return { bg: 'bg-amber-50 border-amber-100', text: 'text-amber-600' }
-  return { bg: 'bg-red-50 border-red-100', text: 'text-red-500' }
-}
-
-// ─── Dashboard ────────────────────────────────────────────────────────────────
-export default function Dashboard() {
-  const [recentActivity, setRecentActivity] = useState([])
-  const [visibleCount, setVisibleCount]     = useState(PAGE_SIZE)
-  const [stats, setStats] = useState({
-    totalDetections: 0, totalChange: null,
-    activeAlerts:    0, alertsChange: null,
-  })
-
-  const [range, setRange]         = useState('This week')
-  const [rangeOpen, setRangeOpen] = useState(false)
-  const [pest, setPest]           = useState('All Detections')
-  const [pestOpen, setPestOpen]   = useState(false)
-
-  useEffect(() => {
-    const refresh = () => {
-      setRecentActivity(activityStore.getRecent(7))
-      setStats(activityStore.getStats())
-    }
-    refresh()
-    const unsub = activityStore.subscribe(refresh)
-    return unsub
-  }, [])
-
-  useEffect(() => {
-    setVisibleCount(PAGE_SIZE)
-  }, [recentActivity.length === 0])
-
-  const handleAction = action => console.log(action)
-
-  const visibleEntries = recentActivity.slice(0, visibleCount)
-  const grouped        = groupByDay(visibleEntries)
-  const dayLabels      = Object.keys(grouped)
-  const hasMore        = visibleCount < recentActivity.length
-
-  return (
-      <div className="min-h-screen bg-gray-50/60"
-           onClick={() => { setRangeOpen(false); setPestOpen(false) }}
-      >
-        <main className="px-6 py-8 max-w-7xl mx-auto space-y-8">
-
-          {/* ── Detection Trends ── */}
-          <div>
-            <div className="flex items-center justify-between mb-4">
-            
-
-              {/* Controls */}
-              <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-
-                {/* Pest/disease dropdown */}
-                <div className="relative">
-                  <button
-                      onClick={() => { setPestOpen(o => !o); setRangeOpen(false) }}
-                      className="flex items-center gap-2 text-xs font-semibold text-gray-600 bg-white border border-gray-100 rounded-xl px-3 py-2 shadow-sm hover:border-gray-200 transition-colors"
-                  ><span className="max-w-[130px] truncate">{pest}</span>
-                    <ChevronDown size={12} className={`text-gray-400 flex-shrink-0 transition-transform ${pestOpen ? 'rotate-180' : ''}`} />
-                  </button>
-                  {pestOpen && (
-                      <div className="absolute left-0 top-9 z-20 bg-white border border-gray-100 rounded-xl shadow-md py-1 w-52">
-                        {PEST_OPTIONS.map(p => (
-                            <button key={p}
-                                    onClick={() => { setPest(p); setPestOpen(false) }}
-                                    className={`w-full text-left px-3.5 py-2 text-xs font-medium transition-colors flex items-center gap-2 ${
-                                        p === pest ? 'text-green-600 bg-green-50' : 'text-gray-600 hover:bg-gray-50'
-                                    }`}
-                            >
-                              {p}
-                            </button>
-                        ))}
-                      </div>
-                  )}
-                </div>
-
-                {/* Time range dropdown */}
-                <div className="relative">
-                  <button
-                      onClick={() => { setRangeOpen(o => !o); setPestOpen(false) }}
-                      className="flex items-center gap-2 text-xs font-semibold text-gray-500 bg-white border border-gray-100 rounded-xl px-3 py-2 shadow-sm hover:border-gray-200 transition-colors"
-                  >
-                    {range}
-                    <ChevronDown size={12} className={`text-gray-400 transition-transform ${rangeOpen ? 'rotate-180' : ''}`} />
-                  </button>
-                  {rangeOpen && (
-                      <div className="absolute right-0 top-9 z-20 bg-white border border-gray-100 rounded-xl shadow-md py-1 w-36">
-                        {TIME_RANGES.map(r => (
-                            <button key={r}
-                                    onClick={() => { setRange(r); setRangeOpen(false) }}
-                                    className={`w-full text-left px-3.5 py-2 text-xs font-medium transition-colors ${
-                                        r === range ? 'text-green-600 bg-green-50' : 'text-gray-600 hover:bg-gray-50'
-                                    }`}
-                            >{r}</button>
-                        ))}
-                      </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 pt-5 pb-3">
-              <DoodleGraph range={range} pest={pest} />
-            </div>
-          </div>
-
-          {/* ── Stat cards ── */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard title="Total Detections" value={stats.totalDetections} change={stats.totalChange}  changeLabel="from last week" />
-            <StatCard title="Total Crop Loss"  value="12"                    change={5} />
-            <StatCard title="Active Alerts"    value={stats.activeAlerts}    change={stats.alertsChange} changeLabel="vs previous 24h" />
-            <StatCard title="Healthy Crops"    value="89%"                   change={3} />
-          </div>
-
-          {/* ── Quick Actions ── */}
-          <div>
-            <h2 className="text-base font-bold text-gray-800 mb-4">Quick Actions</h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-              <ActionCard icon={<PlayCircle size={24} />} title="Start Field Monitoring" onClick={() => handleAction('monitor')} />
-              <ActionCard icon={<Upload size={24} />}     title="Upload Image"           onClick={() => handleAction('upload')}  />
-              <ActionCard icon={<Bell size={24} />}       title="View Alarm Logs"        onClick={() => handleAction('alarms')} />
-              <ActionCard icon={<FileText size={24} />}   title="Generate Report"        onClick={() => handleAction('report')} />
-              <ActionCard icon={<MapPin size={24} />}     title="View Fields"            onClick={() => handleAction('fields')} />
-            </div>
-          </div>
-
-          {/* ── Recent Activity ── */}
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-base font-bold text-gray-800">Recent Activity</h2>
-                <p className="text-xs text-gray-400 mt-0.5">Detections from the past 7 days</p>
-              </div>
-              {recentActivity.length > 0 && (
-                  <div className="flex items-center gap-2">
-                <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full">
-                  {recentActivity.length} event{recentActivity.length !== 1 ? 's' : ''}
-                </span>
-                    <button
-                        onClick={() => {
-                          activityStore.clear()
-                          setRecentActivity([])
-                          setVisibleCount(PAGE_SIZE)
-                          setStats({ totalDetections: 0, totalChange: null, activeAlerts: 0, alertsChange: null })
-                        }}
-                        className="text-xs font-medium text-gray-400 hover:text-red-500 transition-colors px-2.5 py-1 rounded-full hover:bg-red-50"
-                    >
-                      Clear
-                    </button>
+            {/* Pests dropdown */}
+            <div className="relative" onClick={e => e.stopPropagation()}>
+              <button
+                  onClick={() => { setActiveView('Pests'); setPestOpen(o => !o); setDiseaseOpen(false) }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700, transition: 'background 0.15s ease', background: activeView === 'Pests' ? '#f1f5f9' : 'transparent', color: activeView === 'Pests' ? '#1e293b' : '#94a3b8' }}
+                  onMouseEnter={e => { if (activeView !== 'Pests') e.currentTarget.style.background = '#f8fafc' }}
+                  onMouseLeave={e => { if (activeView !== 'Pests') e.currentTarget.style.background = 'transparent' }}
+              >
+                Pests
+                {pestValue && activeView === 'Pests' && <span style={{ fontSize: 9, background: '#dcfce7', color: '#15803d', padding: '1px 5px', borderRadius: 4, marginLeft: 2, fontWeight: 700 }}>{pestValue.split(' ').slice(-1)[0]}</span>}
+                <ChevronDown size={10} style={{ color: '#94a3b8', transform: pestOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
+              </button>
+              {pestOpen && (
+                  <div style={{ position: 'absolute', left: 0, top: 'calc(100% + 6px)', zIndex: 40, background: 'white', border: '1px solid #f1f5f9', borderRadius: 14, boxShadow: '0 8px 32px rgba(0,0,0,0.10)', padding: '6px', minWidth: 170 }}>
+                    <button onClick={() => { setPestValue(null); setPestOpen(false) }} style={{ width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 12, cursor: 'pointer', border: 'none', borderRadius: 8, background: !pestValue ? '#f0fdf4' : 'transparent', color: !pestValue ? '#15803d' : '#64748b', fontWeight: 600 }}>All Pests</button>
+                    {PEST_ONLY.map(p => (
+                        <button key={p} onClick={() => { setPestValue(p); setPestOpen(false) }}
+                                style={{ width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 12, cursor: 'pointer', border: 'none', borderRadius: 8, background: pestValue === p ? '#f0fdf4' : 'transparent', color: pestValue === p ? '#15803d' : '#475569', fontWeight: 500 }}
+                                onMouseEnter={e => { if (pestValue !== p) e.currentTarget.style.background = '#f8fafc' }}
+                                onMouseLeave={e => { if (pestValue !== p) e.currentTarget.style.background = 'transparent' }}
+                        >{p}</button>
+                    ))}
                   </div>
               )}
             </div>
 
-            {recentActivity.length === 0 ? (
-                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 text-center">
-                  <div className="w-12 h-12 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-4">
-                    <svg className="w-6 h-6 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                            d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                    </svg>
+            {/* Diseases dropdown */}
+            <div className="relative" onClick={e => e.stopPropagation()}>
+              <button
+                  onClick={() => { setActiveView('Diseases'); setDiseaseOpen(o => !o); setPestOpen(false) }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700, transition: 'background 0.15s ease', background: activeView === 'Diseases' ? '#f1f5f9' : 'transparent', color: activeView === 'Diseases' ? '#1e293b' : '#94a3b8' }}
+                  onMouseEnter={e => { if (activeView !== 'Diseases') e.currentTarget.style.background = '#f8fafc' }}
+                  onMouseLeave={e => { if (activeView !== 'Diseases') e.currentTarget.style.background = 'transparent' }}
+              >
+                Diseases
+                {diseaseValue && activeView === 'Diseases' && <span style={{ fontSize: 9, background: '#fef9c3', color: '#a16207', padding: '1px 5px', borderRadius: 4, marginLeft: 2, fontWeight: 700 }}>{diseaseValue.split(' ').slice(-1)[0]}</span>}
+                <ChevronDown size={10} style={{ color: '#94a3b8', transform: diseaseOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
+              </button>
+              {diseaseOpen && (
+                  <div style={{ position: 'absolute', left: 0, top: 'calc(100% + 6px)', zIndex: 40, background: 'white', border: '1px solid #f1f5f9', borderRadius: 14, boxShadow: '0 8px 32px rgba(0,0,0,0.10)', padding: '6px', minWidth: 170 }}>
+                    <button onClick={() => { setDiseaseValue(null); setDiseaseOpen(false) }} style={{ width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 12, cursor: 'pointer', border: 'none', borderRadius: 8, background: !diseaseValue ? '#f0fdf4' : 'transparent', color: !diseaseValue ? '#15803d' : '#64748b', fontWeight: 600 }}>All Diseases</button>
+                    {DISEASE_ONLY.map(d => (
+                        <button key={d} onClick={() => { setDiseaseValue(d); setDiseaseOpen(false) }}
+                                style={{ width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 12, cursor: 'pointer', border: 'none', borderRadius: 8, background: diseaseValue === d ? '#f0fdf4' : 'transparent', color: diseaseValue === d ? '#15803d' : '#475569', fontWeight: 500 }}
+                                onMouseEnter={e => { if (diseaseValue !== d) e.currentTarget.style.background = '#f8fafc' }}
+                                onMouseLeave={e => { if (diseaseValue !== d) e.currentTarget.style.background = 'transparent' }}
+                        >{d}</button>
+                    ))}
                   </div>
-                  <p className="text-sm font-medium text-gray-400">No recent activity</p>
-                  <p className="text-xs text-gray-300 mt-1">Detections from Field Monitoring will appear here</p>
-                </div>
-            ) : (
-                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                  {dayLabels.map((dayLabel, di) => (
-                      <div key={dayLabel}>
-                        <div className={`px-5 py-2.5 flex items-center gap-3 bg-gray-50/70 ${di > 0 ? 'border-t border-gray-100' : ''}`}>
-                          <span className="text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">{dayLabel}</span>
-                          <div className="flex-1 h-px bg-gray-100" />
-                          <span className="text-[10px] font-semibold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
-                      {grouped[dayLabel].length}
-                    </span>
-                        </div>
-                        <div className="divide-y divide-gray-100">
-                          {grouped[dayLabel].map(entry => {
-                            const { bg, text } = confBadge(entry.confidence)
-                            return (
-                                <div key={entry.id} className="px-5 py-4 hover:bg-gray-50/60 transition-colors flex items-center gap-4">
-                                  <div className="w-8 h-8 rounded-xl bg-green-50 flex items-center justify-center flex-shrink-0">
-                                    <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                                    </svg>
-                                  </div>
-                                  <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                      <p className="text-sm font-semibold text-gray-900 truncate">{entry.class}</p>
-                                      <span className="text-xs text-gray-400">detected via Field Monitoring</span>
-                                    </div>
-                                    <p className="text-xs text-gray-400 mt-0.5">{entry.timestamp} · {relativeTime(entry.epochMs)}</p>
-                                  </div>
-                                  <span className={`text-xs font-bold px-2.5 py-1 rounded-full border flex-shrink-0 ${bg} ${text}`}>
-                            {Math.round(entry.confidence * 100)}%
-                          </span>
-                                </div>
-                            )
-                          })}
-                        </div>
-                      </div>
-                  ))}
-
-                  {(hasMore || visibleCount > PAGE_SIZE) && (
-                      <div className="border-t border-gray-100 px-5 py-3.5 flex items-center justify-between bg-gray-50/50">
-                        {hasMore ? (
-                            <>
-                              <span className="text-xs text-gray-400">Showing {visibleCount} of {recentActivity.length} events</span>
-                              <button onClick={() => setVisibleCount(v => v + PAGE_SIZE)}
-                                      className="flex items-center gap-1.5 text-xs font-semibold text-green-600 hover:text-green-700 transition-colors"
-                              >
-                                Show more
-                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                </svg>
-                              </button>
-                            </>
-                        ) : (
-                            <>
-                              <span className="text-xs text-gray-400">Showing all {recentActivity.length} events</span>
-                              <button onClick={() => setVisibleCount(PAGE_SIZE)}
-                                      className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700 transition-colors"
-                              >
-                                Show less
-                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                                </svg>
-                              </button>
-                            </>
-                        )}
-                      </div>
-                  )}
-                </div>
-            )}
+              )}
+            </div>
           </div>
+
+          {/* Severity legend */}
+          <div className="flex items-center gap-3 flex-wrap">
+            {SEVERITY_CONFIG.map(s => {
+              const active = activeKeys.has(s.key)
+              return (
+                  <button key={s.key} onClick={() => toggleSeries(s.key)}
+                          className="flex items-center gap-1.5 bg-transparent border-0 cursor-pointer p-0"
+                          style={{ opacity: active ? 1 : 0.28, transition: 'opacity 0.2s ease' }}>
+                    <svg width="14" height="6">
+                      <line x1="0" y1="3" x2="14" y2="3" stroke={s.color} strokeWidth="2"
+                            strokeDasharray={s.dashed ? '4 2' : undefined} strokeLinecap="round" />
+                    </svg>
+                    <span className="text-[10px] font-semibold text-slate-500">{s.key}</span>
+                  </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
+             style={{ width: '100%', height: 280, display: 'block', cursor: 'crosshair' }}
+             onMouseMove={handleMouseMove}
+             onMouseLeave={() => setHoverPos({ idx: null, x: 0, y: 0 })}>
+
+          {[0, 0.25, 0.5, 0.75, 1].map(t => {
+            const y   = PY + t * (H - PY * 2)
+            const val = (globalMax * (1 - t)).toFixed(1)
+            return (
+                <g key={t}>
+                  <line x1={PX_L} x2={W - PX_R} y1={y} y2={y} stroke="#f1f5f9" strokeWidth="1" strokeDasharray="4 7" />
+                  <text x={W - PX_R + 10} y={y + 4} textAnchor="start" fontSize="10" fill="#94a3b8" fontFamily="monospace" fontWeight="600">{val}</text>
+                </g>
+            )
+          })}
+
+          {data.labels.map((l, i) => (
+              <text key={l} x={PX_L + (i / (labelCount - 1)) * plotW} y={H - 4}
+                    textAnchor={i === 0 ? 'start' : i === labelCount - 1 ? 'end' : 'middle'}
+                    fontSize="11" fill="#94a3b8" fontFamily="monospace" fontWeight="600">{l}</text>
+          ))}
+
+          {hoverIdx !== null && (
+              <line x1={tooltipX} x2={tooltipX} y1={PY} y2={H - PY} stroke="#e2e8f0" strokeWidth="1.5" strokeDasharray="3 4" />
+          )}
+
+          {SEVERITY_CONFIG.map((s, si) => {
+            if (!activeKeys.has(s.key)) return null
+            const pts = buildPts(s.key)
+            const pd  = smoothD(pts)
+            return (
+                <g key={s.key} style={{ filter: 'url(#doodle)' }}>
+                  <AnimatedFill d={pd} pts={pts} color={s.color} H={H} PY={PY} delay={si * 0.12} animKey={animKey} />
+                  <AnimatedLine d={pd} color={s.color} dashed={s.dashed} delay={si * 0.12} animKey={animKey} />
+                  {hoverIdx !== null && pts[hoverIdx] && (
+                      <>
+                        <circle cx={pts[hoverIdx][0]} cy={pts[hoverIdx][1]} r="6.5" fill="white" stroke={s.color} strokeWidth="2" />
+                        <circle cx={pts[hoverIdx][0]} cy={pts[hoverIdx][1]} r="2.8" fill={s.color} />
+                      </>
+                  )}
+                </g>
+            )
+          })}
+        </svg>
+
+        <FloatingTooltip hoverPos={hoverPos} data={data} hoverIdx={hoverIdx}
+                         severityData={severityData} activeKeys={activeKeys} growthRate={growthRate} />
+      </div>
+  )
+}
+
+/* ─── Stat Cards ─── */
+function MiniStatCard({ title, value, change, changeLabel, accent }) {
+  const hasChange  = change !== null && change !== undefined
+  const isPositive = hasChange && change >= 0
+  return (
+      <div style={{ background: 'white', border: '1.5px solid #f1f5f9', borderRadius: 16 }}
+           className="p-5 flex flex-col justify-between w-40 h-40">
+        <p style={{ color: '#94a3b8' }} className="text-[10px] font-bold tracking-[0.14em] uppercase leading-none m-0">
+          {title}
+        </p>
+        <div className="flex flex-col gap-2">
+          <p style={{ color: '#0f172a' }} className="text-3xl font-black leading-none m-0 tabular-nums">
+            {value}
+          </p>
+          {hasChange && (
+              <div className={`flex items-center gap-1 text-[11px] font-bold ${isPositive ? 'text-emerald-600' : 'text-red-500'}`}>
+                {isPositive ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                <span>{isPositive ? '+' : ''}{change}%</span>
+              </div>
+          )}
+        </div>
+        <p style={{ color: '#cbd5e1', borderTopColor: '#f1f5f9' }} className="text-[10px] m-0 font-semibold leading-none border-t pt-3">
+          {hasChange ? (changeLabel || 'vs. last week') : 'No data yet'}
+        </p>
+      </div>
+  )
+}
+
+function ActionCard({ icon, title, onClick }) {
+  return (
+      <button onClick={onClick}
+              className="bg-white rounded-2xl border border-dashed border-slate-200 px-5 py-5 w-full text-left cursor-pointer flex flex-col gap-3 transition-all duration-200 hover:border-emerald-300 hover:bg-emerald-50 hover:-translate-y-0.5 hover:shadow-sm">
+        <span className="text-emerald-600 opacity-80 flex">{icon}</span>
+        <span className="text-sm font-semibold text-slate-600 leading-snug">{title}</span>
+      </button>
+  )
+}
+
+/* ─── Dashboard ─── */
+export default function Dashboard() {
+  const [range, setRange]           = useState('This week')
+  const [rangeOpen, setRangeOpen]   = useState(false)
+  const [activeView, setActiveView] = useState('All')
+  const [pestValue, setPestValue]   = useState(null)
+  const [diseaseValue, setDiseaseValue] = useState(null)
+  const [helpOpen, setHelpOpen]     = useState(false)
+
+  const pest = activeView === 'Pests' && pestValue
+      ? pestValue
+      : activeView === 'Diseases' && diseaseValue
+          ? diseaseValue
+          : 'All'
+
+  return (
+      <div className="min-h-screen bg-slate-50"
+           onClick={() => setRangeOpen(false)}>
+        <MetricsHelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
+
+        <main className="max-w-screen-2xl mx-auto px-4 sm:px-4 lg:px-8 xl:px-12 py-6 lg:py-10 flex flex-col gap-8">
+
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm">
+
+            {/* Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5 px-8 lg:px-10 pt-8 pb-7 border-b border-slate-50">
+              <div className="flex items-center gap-3">
+                <h2 className="text-2xl font-black text-slate-900 tracking-tight m-0 leading-none whitespace-nowrap">
+                  Key Metrics
+                </h2>
+                <button
+                    onClick={e => { e.stopPropagation(); setHelpOpen(true) }}
+                    style={{ width: 22, height: 22, borderRadius: '50%', border: '1.5px solid #cbd5e1', background: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#94a3b8', transition: 'all 0.15s ease', flexShrink: 0, padding: 0 }}
+
+                >
+                  <span style={{ fontSize: 11, fontWeight: 800, lineHeight: 1, userSelect: 'none' }}>?</span>
+                </button>
+              </div>
+
+              <div onClick={e => e.stopPropagation()}>
+                <DateRangeDropdown
+                    range={range}
+                    onChange={setRange}
+                    open={rangeOpen}
+                    onToggle={() => setRangeOpen(o => !o)}
+                    onClose={() => setRangeOpen(false)}
+                />
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="flex flex-col lg:flex-row items-stretch">
+              <div className="lg:w-[296px] flex-shrink-0 grid grid-cols-2 auto-rows-fr gap-4 p-6 border-b lg:border-b-0 lg:border-r border-slate-50">
+                <MiniStatCard title="Detections"    value={24}   change={12} changeLabel="vs last week" accent="#3b82f6" />
+                <MiniStatCard title="Crop Loss"     value="12%"  change={5}  changeLabel="vs last week" accent="#f43f5e" />
+                <MiniStatCard title="Active Alerts" value={3}    change={-8} changeLabel="vs 24h prior" accent="#f59e0b" />
+                <MiniStatCard title="Healthy Crops" value="89%"  change={3}  changeLabel="vs last week" accent="#22c55e" />
+              </div>
+
+              <div className="flex-1 min-w-0 px-5 lg:px-7 py-6">
+                <DoodleGraph
+                    range={range} pest={pest}
+                    activeView={activeView} setActiveView={setActiveView}
+                    pestValue={pestValue} diseaseValue={diseaseValue}
+                    setPestValue={setPestValue} setDiseaseValue={setDiseaseValue}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Actions */}
+          <div>
+            <div className="mb-5">
+              <p className="text-lg font-bold text-slate-900 m-0 mb-1 tracking-tight">Quick Actions</p>
+              <p className="text-sm text-slate-400 m-0">Jump to common tasks</p>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+              <ActionCard icon={<PlayCircle size={22} />} title="Start Field Monitoring" onClick={() => {}} />
+              <ActionCard icon={<Upload size={22} />}     title="Upload Image"           onClick={() => {}} />
+              <ActionCard icon={<Bell size={22} />}       title="View Alarm Logs"        onClick={() => {}} />
+              <ActionCard icon={<FileText size={22} />}   title="Generate Report"        onClick={() => {}} />
+              <ActionCard icon={<MapPin size={22} />}     title="View Fields"            onClick={() => {}} />
+            </div>
+          </div>
+
         </main>
       </div>
   )

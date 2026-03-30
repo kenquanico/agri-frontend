@@ -7,14 +7,47 @@ const RTC_CONFIG = {
     ],
 }
 
-export function useDroneWebRTC({
-                                   whepUrl = 'http://192.168.1.93:8889/drone/whep',
-                               } = {}) {
+const DEFAULT_WHEP_PATH = '/drone/whep'
+
+const normalizeBaseUrl = (value) => {
+    const raw = String(value || '').trim()
+    if (!raw) return ''
+    if (/^https?:\/\//i.test(raw)) return raw
+    return `http://${raw}`
+}
+
+const resolveWhepUrl = (input) => {
+    const normalized = normalizeBaseUrl(input)
+    if (!normalized) return ''
+
+    try {
+        const url = new URL(normalized)
+        const path = url.pathname || '/'
+        if (path.endsWith('/whep') || path === DEFAULT_WHEP_PATH) {
+            return url.toString()
+        }
+        if (path === '/' || path === '') {
+            url.pathname = DEFAULT_WHEP_PATH
+            return url.toString()
+        }
+        if (path.endsWith('/')) {
+            url.pathname = `${path.slice(0, -1)}/whep`
+            return url.toString()
+        }
+        url.pathname = `${path}/whep`
+        return url.toString()
+    } catch {
+        return normalized
+    }
+}
+
+export function useDroneWebRTC({ whepUrl = '' } = {}) {
     const [remoteStream, setRemoteStream] = useState(null)
     const [connectionState, setConnectionState] = useState('idle')
     const [error, setError] = useState(null)
 
     const pcRef = useRef(null)
+    const sessionUrlRef = useRef('')
 
     const disconnect = useCallback(() => {
         if (pcRef.current) {
@@ -23,6 +56,7 @@ export function useDroneWebRTC({
             pcRef.current.close()
             pcRef.current = null
         }
+        sessionUrlRef.current = ''
         setRemoteStream(null)
         setConnectionState('idle')
         setError(null)
@@ -46,6 +80,13 @@ export function useDroneWebRTC({
 
     const connect = useCallback(async () => {
         if (pcRef.current) return
+
+        const resolvedWhepUrl = resolveWhepUrl(whepUrl)
+        if (!resolvedWhepUrl) {
+            setConnectionState('failed')
+            setError('Missing drone API URL. Please set the drone API/base URL first.')
+            return
+        }
 
         setConnectionState('connecting')
         setError(null)
@@ -74,7 +115,7 @@ export function useDroneWebRTC({
 
             await waitForIceComplete(pc)
 
-            const response = await fetch(whepUrl, {
+            const response = await fetch(resolvedWhepUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/sdp' },
                 body: pc.localDescription.sdp,
@@ -82,6 +123,16 @@ export function useDroneWebRTC({
 
             if (!response.ok) {
                 throw new Error(`WHEP server returned ${response.status}`)
+            }
+
+            // MediaMTX returns the session resource location for future ICE/control operations.
+            const location = response.headers.get('location')
+            if (location) {
+                try {
+                    sessionUrlRef.current = new URL(location, resolvedWhepUrl).toString()
+                } catch {
+                    sessionUrlRef.current = location
+                }
             }
 
             const answerSdp = await response.text()
