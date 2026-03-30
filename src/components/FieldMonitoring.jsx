@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import api from '../api/api'
 import { useDroneWebRTC } from '../api/useDroneWebRTC'
 import { ChevronDown, MapPin, Layers, X, Wifi, Smartphone, Radio, Settings } from 'lucide-react'
+import { classifyDetectionType, appendSharedDetections } from '../store/monitoringStore'
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 const loadDevices = () => {
@@ -386,6 +387,22 @@ export default function FieldMonitoring () {
           ...normalized.map(d => ({ ...d, timestamp: new Date().toLocaleTimeString(), id: Date.now() + Math.random() })),
           ...p,
         ].slice(0, 50))
+
+        // Persist detections to shared store so AlarmLog can read them
+        const nowIso = new Date().toISOString()
+        appendSharedDetections(
+          normalized.map((d) => ({
+            id: crypto.randomUUID(),
+            timestamp: nowIso,
+            type: classifyDetectionType(d.class ?? d.label ?? d.name ?? 'Unknown'),
+            class: d.class ?? d.label ?? d.name ?? 'Unknown',
+            name: d.class ?? d.label ?? d.name ?? 'Unknown',
+            confidence: d.confidence ?? 0,
+            location: selectedField?.fieldName ?? 'Unassigned field',
+            fieldId: selectedField?.id ?? null,
+            source: 'field-monitoring',
+          }))
+        )
       }
     } catch (err) { console.error('Upload failed', err) }
   }

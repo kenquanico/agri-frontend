@@ -3,7 +3,7 @@ import { useState } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./components/context/AuthContext";
 import Sidebar from "./components/Sidebar";
-import Navbar from "./components/Navbar";
+import NavBar from "./components/NavBar";
 import Dashboard from "./components/Dashboard";
 import FieldMonitoring from "./components/FieldMonitoring";
 import Detection from "./components/Detection";
@@ -17,7 +17,7 @@ import "./App.css";
 const MainLayout = ({ children, isCollapsed, onToggle }) => (
     <div className="bg-white min-h-screen">
         <Sidebar isCollapsed={isCollapsed} onToggle={onToggle} />
-        <Navbar  isCollapsed={isCollapsed} onToggle={onToggle} />
+        <NavBar  isCollapsed={isCollapsed} onToggle={onToggle} />
         <main className={`pt-14 transition-all duration-300 ease-in-out ${isCollapsed ? "ml-[72px]" : "ml-60"}`}>
             {children}
         </main>

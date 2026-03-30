@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import api from '../api/api'
+import {
+  SHARED_DETECTIONS_KEY,
+  SHARED_DETECTIONS_EVENT,
+  loadSharedDetections,
+} from '../store/monitoringStore'
 
 const severityConfig = {
   high:   { label: 'High',   classes: 'bg-gray-900 text-white border-gray-800' },
@@ -59,22 +64,37 @@ export default function AlarmLog() {
     setLoading(true)
     setError(null)
     try {
-      // Try the dedicated alarms/detections history endpoint first
-      const res = await api.get('/api/alarms')
-      const raw = res.data?.data ?? res.data ?? []
-      setDetectionLog(Array.isArray(raw) ? raw.map(normalizeRecord) : [])
-      setLastUpdated(new Date())
-    } catch (err) {
-      // Fallback: try the general detections endpoint
+      // Load locally-stored detections from FieldMonitoring
+      const shared = loadSharedDetections().map(normalizeRecord)
+
+      let apiRows = []
       try {
-        const res = await api.get('/api/detections')
+        // Try the dedicated alarms/detections history endpoint first
+        const res = await api.get('/api/alarms')
         const raw = res.data?.data ?? res.data ?? []
-        setDetectionLog(Array.isArray(raw) ? raw.map(normalizeRecord) : [])
-        setLastUpdated(new Date())
-      } catch (fallbackErr) {
-        console.error('Failed to fetch alarm log:', fallbackErr)
-        setError('Could not load detection records. Make sure the API server is running.')
+        apiRows = Array.isArray(raw) ? raw.map(normalizeRecord) : []
+      } catch {
+        // Fallback: try the general detections endpoint
+        try {
+          const res = await api.get('/api/detections')
+          const raw = res.data?.data ?? res.data ?? []
+          apiRows = Array.isArray(raw) ? raw.map(normalizeRecord) : []
+        } catch (fallbackErr) {
+          console.error('Failed to fetch alarm log:', fallbackErr)
+          if (shared.length === 0) {
+            setError('Could not load detection records. Make sure the API server is running.')
+          }
+        }
       }
+
+      // Merge, deduplicate by id, sort newest first
+      const merged = [...shared, ...apiRows]
+      const deduped = Array.from(
+        new Map(merged.map(r => [String(r.id), r])).values()
+      )
+      deduped.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      setDetectionLog(deduped)
+      setLastUpdated(new Date())
     } finally {
       setLoading(false)
     }
@@ -83,10 +103,25 @@ export default function AlarmLog() {
   // Initial fetch
   useEffect(() => { fetchAlarms() }, [fetchAlarms])
 
-  // Auto-refresh every 30 seconds
+  // Auto-refresh: poll every 5 s, react to same-tab writes, and cross-tab storage changes
   useEffect(() => {
     const interval = setInterval(fetchAlarms, 30_000)
-    return () => clearInterval(interval)
+
+    // Same-tab: FieldMonitoring dispatches this after writing to localStorage
+    const onCustomEvent = () => fetchAlarms()
+    window.addEventListener(SHARED_DETECTIONS_EVENT, onCustomEvent)
+
+    // Cross-tab: browser fires 'storage' when another tab modifies localStorage
+    const onStorage = (e) => {
+      if (e.key === SHARED_DETECTIONS_KEY) fetchAlarms()
+    }
+    window.addEventListener('storage', onStorage)
+
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener(SHARED_DETECTIONS_EVENT, onCustomEvent)
+      window.removeEventListener('storage', onStorage)
+    }
   }, [fetchAlarms])
 
   const filteredLog = filter === 'all'
