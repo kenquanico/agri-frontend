@@ -32,6 +32,7 @@ const DeviceIcon = ({ type, size = 14 }) => {
 
 // ─── Shared detections (bridge to AlarmLog) ──────────────────────────────────
 const SHARED_DETECTIONS_KEY = 'agriSharedDetections'
+const SHARED_DETECTIONS_EVENT = 'agri:shared-detections-updated'
 
 const PEST_KEYWORDS = ['aphid', 'whitefly', 'mite', 'beetle', 'caterpillar', 'thrip', 'weevil', 'locust', 'pest']
 
@@ -56,11 +57,7 @@ const appendSharedDetections = (newRecords) => {
     // Cap at 500 most-recent entries
     const capped = merged.slice(0, 500)
     localStorage.setItem(SHARED_DETECTIONS_KEY, JSON.stringify(capped))
-    // Notify other tabs/windows (AlarmLog listens to the 'storage' event)
-    window.dispatchEvent(new StorageEvent('storage', {
-      key: SHARED_DETECTIONS_KEY,
-      newValue: JSON.stringify(capped),
-    }))
+    window.dispatchEvent(new CustomEvent(SHARED_DETECTIONS_EVENT))
   } catch (e) {
     console.warn('appendSharedDetections error:', e)
   }
@@ -565,7 +562,7 @@ export default function FieldMonitoring() {
             ) : devices.map(device => {
               const typeInfo = ({ phone: { label: 'IP Stream' }, drone: { label: 'WebRTC' }, generic: { label: 'Stream' } })[device.type] || { label: 'Stream' }
               const styles = DEVICE_TYPE_STYLES[device.type] || DEVICE_TYPE_STYLES.generic
-              const url = getDeviceStreamUrl(device)
+              const url = device.type === 'drone' ? getDroneApiUrl(device) : getDeviceStreamUrl(device)
               return (
                   <button key={device.id} onClick={() => handleSelectDevice(device)}
                           className={`group relative w-full text-left rounded-2xl border-2 border-gray-100 bg-gray-50 p-5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg
@@ -598,29 +595,9 @@ export default function FieldMonitoring() {
         {showSourceModal && <SourceModal />}
         <div className="max-w-7xl mx-auto space-y-6">
 
-          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold tracking-widest text-green-600 uppercase mb-1">Live</p>
-              <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Field Monitoring</h1>
-            </div>
-            <FieldSelector />
-          </div>
+          {/* Field selector moved into camera overlay */}
 
-          {selectedField && (
-              <div className="bg-white rounded-2xl border border-green-100 shadow-sm px-5 py-4 flex flex-wrap items-center gap-4">
-                <div className="w-10 h-10 rounded-xl bg-green-500 flex items-center justify-center text-white font-bold text-lg flex-shrink-0 shadow-sm shadow-green-300">
-                  {selectedField.fieldName.charAt(0).toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-gray-900">{selectedField.fieldName}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{selectedField.area} {selectedField.measurementUnit}{selectedField.crops != null && ` · ${selectedField.crops} crops`}{selectedField.farmers?.length > 0 && ` · ${selectedField.farmers.length} farmer${selectedField.farmers.length !== 1 ? 's' : ''}`}</p>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="inline-flex items-center gap-1.5 bg-green-50 border border-green-100 text-green-700 text-xs font-semibold px-3 py-1.5 rounded-full"><MapPin size={11} />Monitoring this field</span>
-                  <button onClick={() => setSelectedField(null)} className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-red-500 hover:bg-red-50 px-2.5 py-1.5 rounded-lg transition-colors"><X size={11} />Clear</button>
-                </div>
-              </div>
-          )}
+          {/* Selected field info card removed intentionally; field context is shown in selector/overlay */}
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <div className="lg:col-span-2 space-y-4">
@@ -656,6 +633,12 @@ export default function FieldMonitoring() {
                      onClick={isFullscreen ? wakeControls : undefined}
                      className={`relative bg-gray-950 overflow-hidden flex items-center justify-center ${isFullscreen ? 'w-screen h-screen' : 'aspect-video'}`}
                      style={isFullscreen ? { cursor: controlsVisible ? 'default' : 'none' } : {}}>
+
+                  {!isFullscreen && (
+                      <div className="absolute top-3 right-1 z-20">
+                        <FieldSelector dark />
+                      </div>
+                  )}
 
                   {/* Idle placeholder — shown only when not started */}
                   {!cameraStarted && (

@@ -64,11 +64,7 @@ export default function Detection() {
 
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold tracking-widest text-green-600 uppercase mb-1">AI Analysis</p>
-              <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Detection</h1>
-              <p className="text-sm text-gray-400 mt-0.5">Upload an image to detect pests and diseases</p>
-            </div>
+
 
             {uploadedImage && (
                 <div className="flex gap-2">

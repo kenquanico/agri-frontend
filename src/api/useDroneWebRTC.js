@@ -49,7 +49,7 @@ export function useDroneWebRTC({ whepUrl = '' } = {}) {
     const pcRef = useRef(null)
     const sessionUrlRef = useRef('')
 
-    const disconnect = useCallback(() => {
+    const cleanupPeerConnection = useCallback(() => {
         if (pcRef.current) {
             pcRef.current.ontrack = null
             pcRef.current.onconnectionstatechange = null
@@ -57,10 +57,14 @@ export function useDroneWebRTC({ whepUrl = '' } = {}) {
             pcRef.current = null
         }
         sessionUrlRef.current = ''
+    }, [])
+
+    const disconnect = useCallback(() => {
+        cleanupPeerConnection()
         setRemoteStream(null)
         setConnectionState('idle')
         setError(null)
-    }, [])
+    }, [cleanupPeerConnection])
 
     const waitForIceComplete = (pc) =>
         new Promise((resolve) => {
@@ -79,12 +83,13 @@ export function useDroneWebRTC({ whepUrl = '' } = {}) {
         })
 
     const connect = useCallback(async () => {
-        if (pcRef.current) return
+        // Clean stale instance before creating a new peer connection.
+        if (pcRef.current) cleanupPeerConnection()
 
         const resolvedWhepUrl = resolveWhepUrl(whepUrl)
         if (!resolvedWhepUrl) {
             setConnectionState('failed')
-            setError('Missing drone API URL. Please set the drone API/base URL first.')
+            setError('Missing DJI bridge URL. Set MediaMTX API/base URL (e.g. http://<host>:8889).')
             return
         }
 
@@ -142,11 +147,12 @@ export function useDroneWebRTC({ whepUrl = '' } = {}) {
             })
 
         } catch (err) {
-            setError(err.message)
+            cleanupPeerConnection()
+            setRemoteStream(null)
+            setError(err?.message || 'WebRTC connection failed')
             setConnectionState('failed')
-            disconnect()
         }
-    }, [whepUrl, disconnect])
+    }, [whepUrl, cleanupPeerConnection])
 
     useEffect(() => {
         return () => disconnect()
