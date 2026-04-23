@@ -1,0 +1,10 @@
+path: /content/drive/MyDrive/dataset
+
+train: images/train
+val: images/val
+
+names:
+  0: sheath_blight
+  1: healthy_rice_leaf
+  2: brown_spot
+  3: bacterial_leaf_blight

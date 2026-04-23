@@ -462,13 +462,14 @@ export default function AlarmLog() {
         const res = await api.get('/api/alarms')
         const raw = res.data?.data ?? res.data ?? []
         apiRows = Array.isArray(raw) ? raw.map(normalizeRecord) : []
-      } catch {
+      } catch (err) {
+        console.error('Alarm fetch failed:', err.response?.status, err.response?.data ?? err.message)
         try {
           const res = await api.get('/api/detections')
           const raw = res.data?.data ?? res.data ?? []
           apiRows = Array.isArray(raw) ? raw.map(normalizeRecord) : []
-        } catch {
-          apiRows = []
+        } catch (err2) {
+          console.error('Detections fetch also failed:', err2.response?.status, err2.response?.data ?? err2.message)
         }
       }
 
