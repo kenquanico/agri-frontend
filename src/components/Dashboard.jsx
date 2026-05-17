@@ -1,14 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { PlayCircle, Upload, Bell, FileText, MapPin, TrendingUp, TrendingDown, ChevronDown, X, Loader2, CheckCircle, AlertCircle } from 'lucide-react'
+import api from '../api/api'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const SHARED_DETECTIONS_KEY = 'agriSharedDetections'
 
 const formatDateShort = (date) => date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 const formatMonthYear = (date) => date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
 
-// ── Real-time date-aware time ranges ─────────────────────────────────────────
 const buildTimeRanges = () => {
   const now = new Date()
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -37,7 +35,6 @@ const buildTimeRanges = () => {
   ]
 }
 
-// ── Build date-range bucket labels (real-time) ──────────────────────────────
 const buildRangeBuckets = () => {
   const now = new Date()
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -62,9 +59,6 @@ const buildRangeBuckets = () => {
       })
 
   const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1)
-  const lastMonthWeekStarts = Array.from({ length: 4 }, (_, i) => {
-    const d = new Date(lastMonthStart); d.setDate(1 + i * 7); return d
-  })
 
   return {
     'This week': {
@@ -118,7 +112,6 @@ const buildRangeBuckets = () => {
   }
 }
 
-// ── Build dynamic graph data from real detections ────────────────────────────
 const buildDynamicGraphData = (detectionsList, classes) => {
   const buckets = buildRangeBuckets()
   const allClasses = ['All', ...classes]
@@ -126,9 +119,7 @@ const buildDynamicGraphData = (detectionsList, classes) => {
 
   Object.entries(buckets).forEach(([rangeKey, bucket]) => {
     const series = {}
-    allClasses.forEach(cls => {
-      series[cls] = Array(bucket.bucketCount).fill(0)
-    })
+    allClasses.forEach(cls => { series[cls] = Array(bucket.bucketCount).fill(0) })
 
     detectionsList.forEach(det => {
       if (!det.timestamp) return
@@ -143,11 +134,6 @@ const buildDynamicGraphData = (detectionsList, classes) => {
 
   return result
 }
-
-// PEST_ONLY and DISEASE_ONLY are now derived dynamically from fetched classes
-// kept as empty defaults — filled in at runtime
-const PEST_ONLY_DEFAULT    = []
-const DISEASE_ONLY_DEFAULT = []
 
 const SEVERITY_CONFIG = [
   { key: 'Critical', color: '#ef4444', dashed: false },
@@ -195,8 +181,6 @@ const METRICS_HELP = [
   },
 ]
 
-// ─── Normalizer ───────────────────────────────────────────────────────────────
-
 const PEST_KEYWORDS = ['aphid', 'whitefly', 'mite', 'beetle', 'caterpillar', 'thrip', 'weevil', 'locust', 'pest',
   'planthopper', 'leafhopper', 'borer', 'folder', 'armyworm']
 
@@ -234,579 +218,543 @@ const normalizeRecord = (raw, index) => {
   }
 }
 
-const loadSharedDetections = () => {
-  try {
-    const raw = JSON.parse(localStorage.getItem(SHARED_DETECTIONS_KEY) || '[]')
-    return Array.isArray(raw) ? raw : []
-  } catch { return [] }
+// ─── PDF Report Generator (Formal DA-BPI / PRIME Surveillance Format) ─────────
+
+const loadJsPDF = () => {
+  return new Promise((resolve, reject) => {
+    if (window.jspdf && window.jspdf.jsPDF) {
+      resolve(window.jspdf.jsPDF)
+      return
+    }
+    // Remove any previously failed script tags
+    document.querySelectorAll('script[data-jspdf]').forEach(s => s.remove())
+    const script = document.createElement('script')
+    script.setAttribute('data-jspdf', '1')
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
+    script.onload = () => {
+      // jsPDF 2.x UMD exposes window.jspdf.jsPDF
+      if (window.jspdf && window.jspdf.jsPDF) {
+        resolve(window.jspdf.jsPDF)
+      } else {
+        reject(new Error('jsPDF loaded but jsPDF constructor not found on window.jspdf'))
+      }
+    }
+    script.onerror = () => reject(new Error('Failed to load jsPDF from CDN'))
+    document.head.appendChild(script)
+  })
 }
 
-// ─── AgriVision PDF Report Generator ─────────────────────────────────────────
-
 const generateAgriVisionReport = async (detections, rangeLabel, userInfo = {}) => {
-  // Load jsPDF
-  if (!window.jspdf) {
-    await new Promise((resolve, reject) => {
-      const s = document.createElement('script')
-      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
-      s.onload = resolve
-      s.onerror = reject
-      document.head.appendChild(s)
-    })
-  }
+  const jsPDF = await loadJsPDF()
 
-  const { jsPDF } = window.jspdf
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
 
-  const W = 210, H = 297
-  const ML = 18, MR = 18, MT = 14
-  const TW = W - ML - MR
-  let y = MT
+  // ── Page & margin constants ──
+  const PW = 210   // page width
+  const PH = 297   // page height
+  const ML = 20    // margin left
+  const MR = 20    // margin right
+  const MT = 18    // margin top (after header)
+  const CW = PW - ML - MR  // content width
 
-  const checkPage = (needed = 20) => {
-    if (y + needed > H - 16) { doc.addPage(); y = MT + 4 }
+  let y = MT
+  let pageNum = 1
+
+  // ── Helpers ──
+  const newPage = () => {
+    doc.addPage()
+    pageNum++
+    drawPageHeader()
+    y = 34
   }
 
+  const checkPage = (needed = 18) => {
+    if (y + needed > PH - 18) newPage()
+  }
+
+  const line = (x1, y1, x2, y2, color = [200, 200, 200], width = 0.3) => {
+    doc.setDrawColor(...color)
+    doc.setLineWidth(width)
+    doc.line(x1, y1, x2, y2)
+  }
+
+  const rect = (x, yy, w, h, fillRGB, strokeRGB, radius = 0) => {
+    if (fillRGB) doc.setFillColor(...fillRGB)
+    if (strokeRGB) doc.setDrawColor(...strokeRGB)
+    else doc.setDrawColor(0, 0, 0, 0)
+    doc.setLineWidth(0.2)
+    if (radius > 0) {
+      doc.roundedRect(x, yy, w, h, radius, radius, fillRGB && strokeRGB ? 'FD' : fillRGB ? 'F' : 'D')
+    } else {
+      doc.rect(x, yy, w, h, fillRGB && strokeRGB ? 'FD' : fillRGB ? 'F' : 'D')
+    }
+  }
+
+  const txt = (text, x, yy, opts = {}) => {
+    const {
+      size = 9, bold = false, color = [30, 30, 30], align = 'left',
+      italic = false, maxW = null, lineHeight = 5
+    } = opts
+    doc.setFontSize(size)
+    doc.setFont('helvetica', bold ? (italic ? 'bolditalic' : 'bold') : (italic ? 'italic' : 'normal'))
+    doc.setTextColor(...color)
+    if (maxW) {
+      const lines = doc.splitTextToSize(String(text), maxW)
+      lines.forEach((l, i) => doc.text(l, x, yy + i * lineHeight, { align }))
+      return lines.length * lineHeight
+    }
+    doc.text(String(text), x, yy, { align })
+    return lineHeight
+  }
+
+  // ── Page header (repeats on every page) ──
   const now = new Date()
   const reportId = `AGV-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}-${Math.floor(Math.random()*9000+1000)}`
-  const timestamp = now.toLocaleString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
-
-  const total = detections.length
-  const pests = detections.filter(d => d.type === 'Pest').length
-  const diseases = detections.filter(d => d.type === 'Disease').length
-  const criticalCount = detections.filter(d => d.severity === 'critical').length
-  const highCount = detections.filter(d => d.severity === 'high' || d.severity === 'critical').length
-  const avgConf = total > 0 ? Math.round(detections.reduce((s,d) => s + d.confidence, 0) / total) : 0
-  const overallRisk = criticalCount > 0 ? 'HIGH' : highCount > 2 ? 'MEDIUM' : 'LOW'
-  const riskColor = overallRisk === 'HIGH' ? [220, 38, 38] : overallRisk === 'MEDIUM' ? [217, 119, 6] : [22, 163, 74]
-
-  // ── HEADER SECTION ────────────────────────────────────────────────────────
-
-  // Top green bar
-  doc.setFillColor(16, 124, 66)
-  doc.rect(0, 0, W, 38, 'F')
-
-  // Subtle diagonal stripe texture
-  doc.setDrawColor(255, 255, 255)
-  doc.setLineWidth(0.2)
-  doc.setGState && doc.setGState(doc.GState({ opacity: 0.06 }))
-  for (let i = -10; i < W + 50; i += 8) {
-    doc.line(i, 0, i + 40, 38)
-  }
-  doc.setGState && doc.setGState(doc.GState({ opacity: 1.0 }))
-
-  // Logo circle (leaf icon placeholder)
-  doc.setFillColor(255, 255, 255)
-  doc.circle(ML + 10, 19, 9, 'F')
-  doc.setFillColor(16, 124, 66)
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(9)
-  doc.setTextColor(16, 124, 66)
-  doc.text('AV', ML + 6.5, 21)
-
-  // System name + report title
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(17)
-  doc.setTextColor(255, 255, 255)
-  doc.text('AgriVision', ML + 24, 15)
-
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(9)
-  doc.setTextColor(187, 247, 208)
-  doc.text('Pest and Disease Detection Report', ML + 24, 22)
-  doc.text(`Field Monitoring & Analysis System  •  Model: YOLOv8n`, ML + 24, 28)
-
-  // Report ID badge
-  doc.setFillColor(0, 0, 0)
-  doc.setDrawColor(255, 255, 255)
-  doc.setLineWidth(0.4)
-  doc.roundedRect(W - MR - 48, 8, 48, 22, 3, 3, 'D')
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(6.5)
-  doc.setTextColor(187, 247, 208)
-  doc.text('REPORT ID', W - MR - 44, 15)
-  doc.setFontSize(8)
-  doc.setTextColor(255, 255, 255)
-  doc.text(reportId, W - MR - 44, 22)
-  doc.setFontSize(6)
-  doc.setTextColor(187, 247, 208)
-  doc.text(now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }), W - MR - 44, 27)
-
-  y = 46
-
-  // Metadata row
-  doc.setFillColor(240, 253, 244)
-  doc.rect(ML, y, TW, 18, 'F')
-  doc.setDrawColor(187, 247, 208)
-  doc.setLineWidth(0.3)
-  doc.rect(ML, y, TW, 18, 'D')
-
-  const metaFields = [
-    { label: 'Generated', value: timestamp },
-    { label: 'Period', value: rangeLabel },
-    { label: 'Farmer / User', value: userInfo.name || 'Field Officer' },
-    { label: 'Location', value: userInfo.location || 'Multiple Field Zones' },
-  ]
-  metaFields.forEach((m, i) => {
-    const cx = ML + 4 + i * (TW / 4)
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(6.5)
-    doc.setTextColor(22, 163, 74)
-    doc.text(m.label.toUpperCase(), cx, y + 6)
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(7.5)
-    doc.setTextColor(30, 41, 59)
-    const truncated = m.value.length > 28 ? m.value.slice(0, 26) + '…' : m.value
-    doc.text(truncated, cx, y + 13)
+  const generatedAt = now.toLocaleString('en-US', {
+    year: 'numeric', month: 'long', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
   })
 
-  y += 26
+  const drawPageHeader = () => {
+    // Green top bar
+    rect(0, 0, PW, 24, [14, 110, 60])
+    // Logo circle
+    rect(ML, 4, 16, 16, [255, 255, 255], null, 2)
+    txt('AV', ML + 4.2, 14, { size: 8, bold: true, color: [14, 110, 60] })
+    // Title block
+    txt('AgriVision', ML + 20, 10, { size: 13, bold: true, color: [255, 255, 255] })
+    txt('Pest & Disease Surveillance Report  ·  DA-BPI PRIME Monitoring System', ML + 20, 16, { size: 7, color: [180, 240, 200] })
+    // Report ID block (right side)
+    txt('REPORT NO.', PW - MR - 1, 9, { size: 6, bold: true, color: [180, 240, 200], align: 'right' })
+    txt(reportId, PW - MR - 1, 14, { size: 8, bold: true, color: [255, 255, 255], align: 'right' })
+    txt(`Page ${pageNum}`, PW - MR - 1, 19, { size: 6, color: [180, 240, 200], align: 'right' })
+    // Thin gold accent line below header
+    line(0, 24, PW, 24, [14, 110, 60], 0.8)
+    line(0, 25.5, PW, 25.5, [234, 179, 8], 0.5)
+  }
 
-  // ── SECTION HEADER helper ─────────────────────────────────────────────────
-  const sectionHeader = (title, number) => {
+  // ── Footer on every page ──
+  const drawFooter = (pn, total) => {
+    doc.setPage(pn)
+    line(ML, PH - 14, PW - MR, PH - 14, [200, 200, 200], 0.3)
+    txt('CONFIDENTIAL — For Authorized Use Only  ·  Bureau of Plant Industry (BPI), Department of Agriculture', ML, PH - 9, { size: 6, color: [130, 130, 130] })
+    txt(`${generatedAt}  ·  Model: YOLOv8n  ·  Page ${pn} of ${total}`, PW - MR, PH - 9, { size: 6, color: [130, 130, 130], align: 'right' })
+  }
+
+  // ── Section header ──
+  const sectionHeader = (label, number) => {
     checkPage(16)
-    doc.setFillColor(16, 124, 66)
-    doc.rect(ML, y, 2.5, 10, 'F')
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(10)
-    doc.setTextColor(15, 23, 42)
-    doc.text(`${number}. ${title}`, ML + 6, y + 7.2)
-    doc.setDrawColor(229, 231, 235)
-    doc.setLineWidth(0.3)
-    doc.line(ML + 6 + doc.getTextWidth(`${number}. ${title}`) + 4, y + 4, W - MR, y + 4)
+    rect(ML, y, 3, 10, [14, 110, 60])
+    txt(`${number}.  ${label.toUpperCase()}`, ML + 6, y + 7, { size: 9.5, bold: true, color: [20, 20, 20] })
+    line(ML + 6 + doc.getTextWidth(`${number}.  ${label.toUpperCase()}`) * (9.5 / 12) + 3, y + 3.5, PW - MR, y + 3.5, [220, 220, 220], 0.3)
     y += 14
   }
 
-  // ── TABLE helper ──────────────────────────────────────────────────────────
-  const drawTable = (headers, rows, colWidths, opts = {}) => {
-    const rowH = opts.rowH || 9
+  // ── Key-value row (two column) ──
+  const kvRow = (label, value, x, yy, labelW = 40) => {
+    txt(label, x, yy, { size: 8, bold: true, color: [90, 90, 90] })
+    txt(':', x + labelW - 4, yy, { size: 8, color: [90, 90, 90] })
+    txt(value, x + labelW + 1, yy, { size: 8, color: [25, 25, 25] })
+  }
+
+  // ── Badge ──
+  const badge = (label, x, yy, bgRGB, textRGB = [255, 255, 255]) => {
+    const w = doc.getTextWidth(label) * (7 / 12) + 8
+    rect(x, yy - 4, w, 6, bgRGB, null, 1.5)
+    txt(label, x + 4, yy, { size: 7, bold: true, color: textRGB })
+    return w
+  }
+
+  // ── Simple horizontal table ──
+  const drawTable = (headers, rows, colWidths, startX = ML, headerBg = [14, 110, 60]) => {
+    const rowH = 8
     const totalW = colWidths.reduce((a, b) => a + b, 0)
 
-    // Header
-    doc.setFillColor(16, 124, 66)
-    doc.rect(ML, y, totalW, rowH, 'F')
-    let cx = ML
+    checkPage(rowH + 4)
+    rect(startX, y, totalW, rowH, headerBg)
+    let cx = startX
     headers.forEach((h, i) => {
-      doc.setFont('helvetica', 'bold')
-      doc.setFontSize(7.5)
-      doc.setTextColor(255, 255, 255)
-      doc.text(h, cx + 3, y + 6.2)
+      txt(h, cx + 3, y + 5.5, { size: 7.5, bold: true, color: [255, 255, 255] })
       cx += colWidths[i]
     })
     y += rowH
 
     rows.forEach((row, ri) => {
       checkPage(rowH + 2)
-      doc.setFillColor(ri % 2 === 0 ? 248 : 255, ri % 2 === 0 ? 250 : 255, ri % 2 === 0 ? 252 : 255)
-      doc.rect(ML, y, totalW, rowH, 'F')
-      doc.setDrawColor(241, 245, 249)
-      doc.setLineWidth(0.2)
-      doc.rect(ML, y, totalW, rowH, 'D')
-
-      cx = ML
+      const bgColor = ri % 2 === 0 ? [247, 250, 247] : [255, 255, 255]
+      rect(startX, y, totalW, rowH, bgColor, [235, 235, 235])
+      cx = startX
       row.forEach((cell, ci) => {
         const cellStr = String(cell.value ?? cell)
-        const isBadge = cell.badge
-        if (isBadge) {
-          const [br, bg, bb] = cell.color || [22, 163, 74]
-          doc.setFillColor(br, bg, bb)
-          doc.roundedRect(cx + 2, y + 1.5, Math.min(colWidths[ci] - 4, doc.getTextWidth(cellStr) + 6), rowH - 3, 1.5, 1.5, 'F')
-          doc.setFont('helvetica', 'bold')
-          doc.setFontSize(7)
-          doc.setTextColor(255, 255, 255)
-          doc.text(cellStr, cx + 5, y + 6)
+        if (cell.badge) {
+          badge(cellStr, cx + 2, y + 5.5, cell.bgColor || [80, 80, 80])
         } else {
-          doc.setFont(cell.bold ? 'helvetica' : 'helvetica', cell.bold ? 'bold' : 'normal')
-          doc.setFontSize(7.5)
-          doc.setTextColor(cell.dim ? 100 : 30, cell.dim ? 116 : 41, cell.dim ? 139 : 59)
-          const txt = doc.splitTextToSize(cellStr, colWidths[ci] - 5)[0]
-          doc.text(txt, cx + 3, y + 6.2)
+          txt(cellStr, cx + 3, y + 5.5, {
+            size: 7.5,
+            bold: cell.bold || false,
+            color: cell.color || (cell.dim ? [120, 120, 120] : [30, 30, 30]),
+            maxW: colWidths[ci] - 5,
+            lineHeight: 4,
+          })
         }
         cx += colWidths[ci]
       })
       y += rowH
     })
-    y += 6
+    y += 5
   }
 
-  // ── 1. EXECUTIVE SUMMARY ──────────────────────────────────────────────────
-  sectionHeader('Executive Summary', '1')
+  // ── Stat card row ──
+  const statCards = (items) => {
+    const cardW = (CW - (items.length - 1) * 4) / items.length
+    const cardH = 22
+    checkPage(cardH + 6)
+    items.forEach((item, i) => {
+      const cx = ML + i * (cardW + 4)
+      rect(cx, y, cardW, cardH, [245, 250, 245], [220, 235, 220], 2)
+      txt(item.value, cx + 5, y + 12, { size: 16, bold: true, color: item.color || [14, 110, 60] })
+      txt(item.label, cx + 5, y + 18.5, { size: 7, color: [110, 110, 110] })
+    })
+    y += cardH + 8
+  }
 
-  const riskWord = overallRisk === 'HIGH' ? 'high' : overallRisk === 'MEDIUM' ? 'moderate' : 'low'
-  const summaryText = `The AgriVision system completed an automated scan of all monitored field zones during the reporting period (${rangeLabel}). A total of ${total} detection event${total !== 1 ? 's' : ''} were recorded — ${pests} classified as pest occurrences and ${diseases} as disease anomalies. The average model confidence across all detections was ${avgConf}%, indicating ${avgConf >= 85 ? 'strong' : avgConf >= 70 ? 'acceptable' : 'moderate'} detection reliability. ${highCount} detection${highCount !== 1 ? 's' : ''} were classified at high or critical severity, placing the overall crop risk at ${riskWord} level. Immediate field inspection and targeted intervention are ${overallRisk === 'HIGH' ? 'urgently required' : overallRisk === 'MEDIUM' ? 'recommended within 48 hours' : 'not necessary at this time but routine monitoring should continue'}.`
+  // ══════════════════════════════════════════════════════════════
+  // BEGIN REPORT GENERATION
+  // ══════════════════════════════════════════════════════════════
 
-  doc.setFillColor(248, 250, 252)
-  doc.setDrawColor(226, 232, 240)
-  doc.setLineWidth(0.3)
-  doc.roundedRect(ML, y, TW, 28, 3, 3, 'FD')
+  drawPageHeader()
+  y = 32
 
-  // Risk badge inside summary
-  doc.setFillColor(...riskColor)
-  doc.roundedRect(W - MR - 28, y + 5, 26, 10, 2, 2, 'F')
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(8)
-  doc.setTextColor(255, 255, 255)
-  doc.text(`RISK: ${overallRisk}`, W - MR - 26, y + 11.5)
+  // ── SECTION: Cover / Transmittal Information ──
+  const total = detections.length
+  const pests = detections.filter(d => d.type === 'Pest').length
+  const diseases = detections.filter(d => d.type === 'Disease').length
+  const criticalCount = detections.filter(d => d.severity === 'critical').length
+  const highCount = detections.filter(d => d.severity === 'high' || d.severity === 'critical').length
+  const moderateCount = detections.filter(d => d.severity === 'moderate' || d.severity === 'medium').length
+  const lowCount = detections.filter(d => d.severity === 'low').length
+  const avgConf = total > 0 ? Math.round(detections.reduce((s, d) => s + d.confidence, 0) / total) : 0
+  const uniqueLocations = [...new Set(detections.map(d => d.location).filter(Boolean))]
+  const overallRisk = criticalCount > 0 ? 'HIGH' : highCount > 2 ? 'MEDIUM' : 'LOW'
+  const riskColor = overallRisk === 'HIGH' ? [220, 38, 38] : overallRisk === 'MEDIUM' ? [217, 119, 6] : [22, 163, 74]
 
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(8.5)
-  doc.setTextColor(51, 65, 85)
-  const sumLines = doc.splitTextToSize(summaryText, TW - 36)
-  doc.text(sumLines, ML + 5, y + 8)
-  y += Math.max(28, sumLines.length * 5) + 8
+  // Transmittal box
+  rect(ML, y, CW, 36, [245, 250, 247], [200, 225, 210], 3)
+  // Left column
+  txt('PEST SURVEILLANCE & EARLY WARNING REPORT', ML + 6, y + 8, { size: 9, bold: true, color: [14, 110, 60] })
+  txt('Pursuant to DA-BPI Circular No. 2020-001 · PRIME Monitoring Framework', ML + 6, y + 13.5, { size: 7, italic: true, color: [90, 120, 90] })
+  line(ML + 6, y + 16, ML + CW * 0.6 - 4, y + 16, [190, 215, 200], 0.3)
+  kvRow('Report Period', rangeLabel, ML + 6, y + 22)
+  kvRow('Date Generated', generatedAt, ML + 6, y + 28)
+  kvRow('Prepared by', userInfo.name || 'Field Monitoring Officer', ML + 6, y + 34)
+  // Right column (risk badge)
+  const riskX = PW - MR - 38
+  rect(riskX, y + 6, 36, 18, riskColor, null, 3)
+  txt('OVERALL RISK', riskX + 18, y + 13, { size: 6.5, bold: true, color: [255, 255, 255], align: 'center' })
+  txt(overallRisk, riskX + 18, y + 20, { size: 11, bold: true, color: [255, 255, 255], align: 'center' })
+  y += 44
 
-  // ── 2. DETECTION OVERVIEW ─────────────────────────────────────────────────
-  checkPage(50)
-  sectionHeader('Detection Overview', '2')
+  // ── SECTION 1: Purpose & Scope ──
+  sectionHeader('Purpose and Scope of Surveillance', '1')
+  const purpose = `This report documents the results of automated field pest and disease surveillance conducted using the AgriVision AI-powered monitoring system (Model: YOLOv8n). Data herein was collected during the reporting period: ${rangeLabel}. The surveillance covers all registered field monitoring zones and image uploads submitted by field officers. This report is prepared in accordance with the Bureau of Plant Industry (BPI) Pest Surveillance and Early Warning Protocol and serves as an official record of pest/disease incidence for the reference of the Integrated Pest Management (IPM) Program and the Regional Field Office (RFO).`
+  const scopeLines = doc.splitTextToSize(purpose, CW)
+  rect(ML, y - 2, CW, scopeLines.length * 4.8 + 6, [250, 252, 250], [225, 235, 225], 2)
+  scopeLines.forEach((l, i) => {
+    txt(l, ML + 5, y + i * 4.8 + 2, { size: 8, color: [40, 40, 40] })
+  })
+  y += scopeLines.length * 4.8 + 12
 
-  const overviewRows = [
-    [
-      { value: 'Pre-harvest (Field)' },
-      { value: 'Live Camera / Upload' },
-      { value: String(total), bold: true },
-      { value: `${avgConf}%`, bold: true },
-      { value: overallRisk, badge: true, color: riskColor },
-    ],
+  // ── SECTION 2: Report Metadata ──
+  sectionHeader('Report Metadata and Certification', '2')
+  const metaData = [
+    ['Report Reference No.', reportId,       'Monitoring System', 'AgriVision v2.1.0 · YOLOv8n'],
+    ['Reporting Period',     rangeLabel,      'Detection Method',  'AI Image Analysis (CNN-based)'],
+    ['Date & Time Generated', generatedAt,   'Classification Model', 'YOLOv8n (ONNX Runtime)'],
+    ['Prepared by',          userInfo.name || 'Field Monitoring Officer',
+      'Field Officer ID',  userInfo.id || 'N/A'],
+    ['Supervising Authority', userInfo.supervisor || 'Regional Plant Health Officer',
+      'Office / Station',  userInfo.location || 'Multiple Field Zones'],
+    ['Distribution',         'DA-RFO, BPI Plant Health Division, IPM Program Office',
+      'Classification',    'CONFIDENTIAL'],
   ]
+  metaData.forEach(([l1, v1, l2, v2]) => {
+    checkPage(9)
+    rect(ML, y - 1, CW / 2 - 2, 8, [248, 250, 248], [232, 238, 232])
+    rect(ML + CW / 2 + 2, y - 1, CW / 2 - 2, 8, [248, 250, 248], [232, 238, 232])
+    kvRow(l1, v1, ML + 3, y + 5, 38)
+    kvRow(l2, v2, ML + CW / 2 + 5, y + 5, 38)
+    y += 9
+  })
+  y += 5
 
+  // ── SECTION 3: Executive Summary ──
+  sectionHeader('Executive Summary', '3')
+  const riskWord = overallRisk === 'HIGH' ? 'HIGH' : overallRisk === 'MEDIUM' ? 'MEDIUM' : 'LOW'
+  const summary = `AgriVision AI surveillance logged a total of ${total} detection event${total !== 1 ? 's' : ''} during the reporting period (${rangeLabel}): ${pests} pest occurrence${pests !== 1 ? 's' : ''} and ${diseases} disease anomal${diseases !== 1 ? 'ies' : 'y'}. Of these, ${criticalCount} event${criticalCount !== 1 ? 's were' : ' was'} classified as CRITICAL, ${highCount - criticalCount} as HIGH, ${moderateCount} as MODERATE, and ${lowCount} as LOW severity. The system achieved an average detection confidence of ${avgConf}%, indicating ${avgConf >= 85 ? 'strong' : avgConf >= 70 ? 'acceptable' : 'moderate'} model reliability. ${uniqueLocations.length} distinct field zone${uniqueLocations.length !== 1 ? 's were' : ' was'} affected. Based on the distribution and severity of detections, the overall crop risk level is classified as ${riskWord}. ${criticalCount > 0 ? 'Immediate field intervention is required.' : highCount > 2 ? 'Field treatment should be scheduled within 24–48 hours.' : 'Continued routine monitoring is advised.'}`
+  const sumLines = doc.splitTextToSize(summary, CW - 10)
+  checkPage(sumLines.length * 4.8 + 12)
+  rect(ML, y - 2, CW, sumLines.length * 4.8 + 8, [248, 252, 248], [215, 232, 215], 2)
+  // Risk badge inside summary box
+  badge(`RISK LEVEL: ${riskWord}`, ML + 5, y + 4, riskColor)
+  y += 7
+  sumLines.forEach((l, i) => {
+    txt(l, ML + 5, y + i * 4.8, { size: 8, color: [35, 35, 35] })
+  })
+  y += sumLines.length * 4.8 + 10
+
+  // ── SECTION 4: Quantitative Overview ──
+  sectionHeader('Quantitative Detection Overview', '4')
+  statCards([
+    { label: 'Total Detection Events', value: String(total),      color: [15, 23, 42] },
+    { label: 'Pest Occurrences',        value: String(pests),      color: [133, 77, 14] },
+    { label: 'Disease Anomalies',       value: String(diseases),   color: [22, 101, 52] },
+    { label: 'High / Critical Events',  value: String(highCount),  color: [185, 28, 28] },
+  ])
+  statCards([
+    { label: 'Avg. Confidence (%)',   value: `${avgConf}%`,                  color: [29, 78, 216] },
+    { label: 'Field Zones Affected',  value: String(uniqueLocations.length), color: [88, 28, 135] },
+    { label: 'Critical Severity',     value: String(criticalCount),           color: [185, 28, 28] },
+    { label: 'Low / Moderate Events', value: String(lowCount + moderateCount), color: [21, 128, 61] },
+  ])
+
+  // Detection type summary table
+  checkPage(30)
   drawTable(
-      ['Detection Type', 'Image Source', 'Total Detections', 'Avg. Confidence', 'Risk Level'],
-      overviewRows,
-      [46, 46, 34, 32, 28]
+      ['Category', 'Count', 'Share (%)', 'Avg. Confidence', 'Detection Source'],
+      [
+        ['Pest Occurrence',    { value: String(pests),    bold: true }, { value: total > 0 ? `${Math.round(pests/total*100)}%` : '—' }, { value: `${pests > 0 ? Math.round(detections.filter(d=>d.type==='Pest').reduce((s,d)=>s+d.confidence,0)/pests) : 0}%` }, 'Camera / Upload'],
+        ['Disease Anomaly',   { value: String(diseases), bold: true }, { value: total > 0 ? `${Math.round(diseases/total*100)}%` : '—' }, { value: `${diseases > 0 ? Math.round(detections.filter(d=>d.type==='Disease').reduce((s,d)=>s+d.confidence,0)/diseases) : 0}%` }, 'Camera / Upload'],
+        [{ value: 'TOTAL', bold: true }, { value: String(total), bold: true }, { value: '100%' }, { value: `${avgConf}%`, bold: true }, '—'],
+      ],
+      [50, 22, 24, 32, 42]
   )
 
-  // Summary stats row
-  const statItems = [
-    { label: 'Total Events', val: String(total), color: [15, 23, 42] },
-    { label: 'Pest Detections', val: String(pests), color: [133, 77, 14] },
-    { label: 'Disease Detections', val: String(diseases), color: [22, 101, 52] },
-    { label: 'High / Critical', val: String(highCount), color: [185, 28, 28] },
-    { label: 'Avg. Confidence', val: `${avgConf}%`, color: [29, 78, 216] },
-    { label: 'Unique Locations', val: String(new Set(detections.map(d => d.location)).size), color: [88, 28, 135] },
+  // ── SECTION 5: Severity Classification Matrix ──
+  sectionHeader('Severity Classification and Risk Matrix', '5')
+  txt('Detection events are classified according to the BPI Pest Severity Scale (PSS-4) as follows:', ML, y, { size: 8, color: [70, 70, 70] })
+  y += 7
+
+  const sevRows = [
+    [
+      { value: 'CRITICAL', badge: true, bgColor: [185, 28, 28] },
+      { value: String(criticalCount), bold: true, color: [185, 28, 28] },
+      { value: total > 0 ? `${Math.round(criticalCount/total*100)}%` : '—' },
+      'Immediate field intervention. Infestation at economic threshold. Notify RFO within 24 hours.',
+      { value: criticalCount > 0 ? 'ACTION REQUIRED' : 'None', badge: criticalCount > 0, bgColor: criticalCount > 0 ? [185, 28, 28] : undefined },
+    ],
+    [
+      { value: 'HIGH', badge: true, bgColor: [180, 70, 10] },
+      { value: String(highCount - criticalCount), bold: true, color: [180, 70, 10] },
+      { value: total > 0 ? `${Math.round((highCount-criticalCount)/total*100)}%` : '—' },
+      'Schedule treatment within 24–48 hours. Increase monitoring frequency.',
+      { value: (highCount - criticalCount) > 0 ? 'SCHEDULE TX' : 'None', badge: (highCount-criticalCount) > 0, bgColor: [217, 119, 6] },
+    ],
+    [
+      { value: 'MODERATE', badge: true, bgColor: [133, 100, 0] },
+      { value: String(moderateCount), bold: true, color: [133, 100, 0] },
+      { value: total > 0 ? `${Math.round(moderateCount/total*100)}%` : '—' },
+      'Prepare treatment plan. Monitor field progression twice weekly.',
+      { value: moderateCount > 0 ? 'MONITOR' : 'None', badge: moderateCount > 0, bgColor: [133, 100, 0] },
+    ],
+    [
+      { value: 'LOW', badge: true, bgColor: [21, 128, 61] },
+      { value: String(lowCount), bold: true, color: [21, 128, 61] },
+      { value: total > 0 ? `${Math.round(lowCount/total*100)}%` : '—' },
+      'Continue routine monitoring. No immediate action required.',
+      { value: 'ROUTINE', badge: true, bgColor: [21, 128, 61] },
+    ],
   ]
+  drawTable(
+      ['Severity Level', 'Count', 'Share', 'Action Threshold', 'Status'],
+      sevRows,
+      [28, 18, 18, 80, 26]
+  )
 
-  const cardW = (TW - 10) / 3
-  const cardH = 20
-  statItems.forEach((item, i) => {
-    const col = i % 3
-    const row = Math.floor(i / 3)
-    const cx = ML + col * (cardW + 5)
-    const cy = y + row * (cardH + 4)
-    checkPage(cardH + 6)
-    doc.setFillColor(248, 250, 252)
-    doc.setDrawColor(226, 232, 240)
-    doc.setLineWidth(0.3)
-    doc.roundedRect(cx, cy, cardW, cardH, 2, 2, 'FD')
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(14)
-    doc.setTextColor(...item.color)
-    doc.text(item.val, cx + 4, cy + 11)
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(7)
-    doc.setTextColor(100, 116, 139)
-    doc.text(item.label, cx + 4, cy + 17)
-  })
-  y += Math.ceil(statItems.length / 3) * (cardH + 4) + 8
-
-  // ── 3. DETECTION RESULTS TABLE ────────────────────────────────────────────
-  checkPage(30)
-  sectionHeader('Detection Results', '3')
-
-  if (detections.length === 0) {
-    doc.setFont('helvetica', 'italic')
-    doc.setFontSize(9)
-    doc.setTextColor(148, 163, 184)
-    doc.text('No detection records available for this reporting period.', ML, y)
-    y += 12
-  } else {
-    const sevColorMap = {
-      critical: [220, 38, 38],
-      high:     [234, 88, 12],
-      medium:   [161, 98, 7],
-      moderate: [161, 98, 7],
-      low:      [22, 163, 74],
-    }
-    const typeColorMap = {
-      Pest:    [133, 77, 14],
-      Disease: [22, 101, 52],
-    }
-
-    const resultRows = detections.slice(0, 20).map(d => [
-      { value: d.name, bold: true },
-      { value: d.type, badge: true, color: typeColorMap[d.type] || [71, 85, 105] },
-      { value: `${d.confidence}%`, bold: true },
-      { value: (d.severity || 'low').charAt(0).toUpperCase() + (d.severity || 'low').slice(1), badge: true, color: sevColorMap[d.severity] || [148, 163, 184] },
-      { value: d.location, dim: true },
-    ])
-
-    drawTable(
-        ['Detected Class', 'Category', 'Confidence (%)', 'Severity Level', 'Affected Area / Location'],
-        resultRows,
-        [42, 24, 28, 26, 46]
-    )
-
-    if (detections.length > 20) {
-      doc.setFont('helvetica', 'italic')
-      doc.setFontSize(7.5)
-      doc.setTextColor(148, 163, 184)
-      doc.text(`  … and ${detections.length - 20} more records not shown. Download full CSV for complete data.`, ML, y - 2)
-      y += 4
-    }
-  }
-
-  // ── 4. ANALYSIS AND INTERPRETATION ───────────────────────────────────────
-  checkPage(40)
-  sectionHeader('Analysis and Interpretation', '4')
-
-  const countByName = {}
-  detections.forEach(d => { countByName[d.name] = (countByName[d.name] || 0) + 1 })
-  const sortedNames = Object.entries(countByName).sort((a, b) => b[1] - a[1]).slice(0, 5)
-
-  const interpretations = {
-    'Brown Planthopper': 'A sap-sucking insect that feeds on rice phloem, causing "hopperburn." Thrives in dense canopies with high nitrogen levels and humid conditions. Spreads rapidly through field-to-field migration.',
-    'Rice Blast':        'Fungal pathogen (Magnaporthe oryzae) causing lesions on leaves, neck, and panicles. Favored by cool nights, warm days, and high humidity. Can cause total crop failure if neck infection occurs at booting.',
-    'Leaf Folder':       'Larval stage folds leaves and feeds on the green tissue, reducing photosynthetic area. Populations increase during vegetative stage with lush, nitrogen-rich growth.',
-    'Stem Borer':        'Larvae bore into stems causing "dead hearts" during vegetative stage or "white ears" at reproductive stage. A major yield-reducing pest with cyclical population surges.',
-    'Rice Tungro':       'A viral disease transmitted by Green Leafhopper. Infected plants show yellow-orange discoloration and stunted growth. No direct chemical control; vector management is critical.',
-    'Bacterial Blight':  'Caused by Xanthomonas oryzae. Spreads through water, wounds, and infected seedlings. Produces water-soaked lesions that turn yellow to white. Worsens under flooding and wind damage.',
-  }
-
-  if (sortedNames.length === 0) {
-    doc.setFont('helvetica', 'italic')
-    doc.setFontSize(9)
-    doc.setTextColor(148, 163, 184)
-    doc.text('No detections to interpret for this period.', ML, y)
+  // ── SECTION 6: Field Zone Summary ──
+  sectionHeader('Field Zone Detection Summary', '6')
+  if (uniqueLocations.length === 0) {
+    txt('No field zone data available for this reporting period.', ML, y, { size: 8, italic: true, color: [150, 150, 150] })
     y += 10
   } else {
-    sortedNames.forEach(([name, count]) => {
-      checkPage(24)
-      const interp = interpretations[name] || `${name} was detected ${count} time${count !== 1 ? 's' : ''}. Monitor closely and cross-validate with manual field scouting to determine severity and spread.`
-      const d = detections.find(r => r.name === name)
-      const typeColor = d?.type === 'Pest' ? [133, 77, 14] : [22, 101, 52]
-
-      doc.setFillColor(248, 250, 252)
-      doc.setDrawColor(226, 232, 240)
-      doc.setLineWidth(0.3)
-
-      const textLines = doc.splitTextToSize(interp, TW - 16)
-      const blockH = 10 + textLines.length * 5 + 4
-      doc.roundedRect(ML, y, TW, blockH, 2, 2, 'FD')
-
-      doc.setFillColor(...typeColor)
-      doc.rect(ML, y, 2.5, blockH, 'F')
-
-      doc.setFont('helvetica', 'bold')
-      doc.setFontSize(9)
-      doc.setTextColor(...typeColor)
-      doc.text(`${name}`, ML + 7, y + 7)
-
-      doc.setFillColor(...typeColor)
-      doc.roundedRect(ML + 7 + doc.getTextWidth(name) + 3, y + 2.5, 26, 5.5, 1, 1, 'F')
-      doc.setFont('helvetica', 'bold')
-      doc.setFontSize(6.5)
-      doc.setTextColor(255, 255, 255)
-      doc.text(`${count} detection${count !== 1 ? 's' : ''}`, ML + 7 + doc.getTextWidth(name) + 5.5, y + 6.8)
-
-      doc.setFont('helvetica', 'normal')
-      doc.setFontSize(8)
-      doc.setTextColor(71, 85, 105)
-      doc.text(textLines, ML + 7, y + 13)
-      y += blockH + 5
+    const zoneRows = uniqueLocations.map(loc => {
+      const zoneDets = detections.filter(d => d.location === loc)
+      const zCrit = zoneDets.filter(d => d.severity === 'critical').length
+      const zHigh = zoneDets.filter(d => d.severity === 'high').length
+      const zMod  = zoneDets.filter(d => d.severity === 'moderate' || d.severity === 'medium').length
+      const zLow  = zoneDets.filter(d => d.severity === 'low').length
+      const zRisk = zCrit > 0 ? 'HIGH' : zHigh > 1 ? 'MED' : 'LOW'
+      const zRiskColor = zCrit > 0 ? [185, 28, 28] : zHigh > 1 ? [217, 119, 6] : [21, 128, 61]
+      const zConf = zoneDets.length > 0 ? Math.round(zoneDets.reduce((s, d) => s + d.confidence, 0) / zoneDets.length) : 0
+      return [
+        { value: loc, bold: true },
+        { value: String(zoneDets.length), bold: true },
+        String(zCrit),
+        String(zHigh),
+        String(zMod + zLow),
+        `${zConf}%`,
+        { value: zRisk, badge: true, bgColor: zRiskColor },
+      ]
     })
+    drawTable(
+        ['Field Zone / Location', 'Total', 'Critical', 'High', 'Mod/Low', 'Avg Conf.', 'Zone Risk'],
+        zoneRows,
+        [48, 18, 18, 18, 18, 22, 28]
+    )
   }
 
-  // ── 5. RECOMMENDATIONS ────────────────────────────────────────────────────
-  checkPage(50)
-  sectionHeader('Recommendations', '5')
+  // ── SECTION 7: Chronological Detection Log ──
+  sectionHeader('Chronological Detection Log', '7')
+  txt('Records are listed in reverse chronological order. Maximum 30 entries displayed; full dataset available in the system.', ML, y, { size: 7.5, italic: true, color: [100, 100, 100] })
+  y += 7
 
-  const recSections = [
-    {
-      title: 'Immediate Actions',
-      color: [220, 38, 38],
-      bg: [254, 242, 242],
-      border: [252, 165, 165],
-      items: highCount > 0
-          ? [
-            `Dispatch field scouts to inspect ${highCount} high/critical severity detection zone${highCount !== 1 ? 's' : ''} within 24 hours.`,
-            'Apply targeted pesticide or fungicide treatment in confirmed hotspot areas using precision spraying.',
-            'Isolate and mark affected field sections to prevent lateral spread to adjacent plots.',
+  const sevColorMap = {
+    critical: [185, 28, 28], high: [180, 70, 10],
+    medium: [133, 100, 0], moderate: [133, 100, 0], low: [21, 128, 61]
+  }
+  const typeColorMap = { Pest: [133, 77, 14], Disease: [21, 101, 52] }
+
+  if (detections.length === 0) {
+    txt('No detection records available for this reporting period.', ML, y, { size: 8, italic: true, color: [150, 150, 150] })
+    y += 10
+  } else {
+    const logRows = [...detections]
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+        .slice(0, 30)
+        .map((d, i) => {
+          const ts = new Date(d.timestamp)
+          const dateStr = ts.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+          const timeStr = ts.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+          const sev = (d.severity || 'low').toLowerCase()
+          return [
+            { value: String(i + 1), dim: true },
+            `${dateStr} ${timeStr}`,
+            { value: d.name || 'Unknown', bold: true },
+            { value: d.type, badge: true, bgColor: typeColorMap[d.type] || [80, 80, 80] },
+            `${d.confidence}%`,
+            { value: (sev.charAt(0).toUpperCase() + sev.slice(1)), badge: true, bgColor: sevColorMap[sev] || [80, 80, 80] },
+            { value: d.location || 'Unknown', dim: true },
           ]
-          : ['No critical detections at this time. Maintain standard monitoring schedule.'],
-    },
-    {
-      title: 'Short-Term (3–7 Days)',
-      color: [217, 119, 6],
-      bg: [255, 251, 235],
-      border: [253, 230, 138],
-      items: [
-        'Verify AI detections with manual scouting — cross-reference confidence scores against physical inspection.',
-        pests > 0
-            ? `Monitor pest pressure closely — ${pests} pest event${pests !== 1 ? 's' : ''} logged this period. Adjust spray schedule if counts exceed economic threshold.`
-            : 'No pest events logged. Continue preventive monitoring of field perimeters.',
-        'Adjust irrigation timing and drainage in disease-affected zones to lower humidity at canopy level.',
-      ],
-    },
-    {
-      title: 'Long-Term Management',
-      color: [22, 163, 74],
-      bg: [240, 253, 244],
-      border: [134, 239, 172],
-      items: [
-        'Review varietal resistance profiles; consider adopting certified disease-resistant cultivars next planting season.',
-        'Increase monitoring frequency during peak humidity months (June–September) and after heavy rainfall events.',
-        'Maintain a complete detection log for seasonal trend analysis and long-term yield loss estimation.',
-      ],
-    },
-  ]
-
-  recSections.forEach(sec => {
-    checkPage(36)
-    const itemsH = sec.items.length * 11 + 14
-    doc.setFillColor(...sec.bg)
-    doc.setDrawColor(...sec.border)
-    doc.setLineWidth(0.4)
-    doc.roundedRect(ML, y, TW, itemsH, 3, 3, 'FD')
-    doc.setFillColor(...sec.color)
-    doc.rect(ML, y, 3, itemsH, 'F')
-
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(8.5)
-    doc.setTextColor(...sec.color)
-    doc.text(sec.title, ML + 8, y + 8)
-
-    sec.items.forEach((item, i) => {
-      checkPage(12)
-      doc.setFont('helvetica', 'normal')
-      doc.setFontSize(8)
-      doc.setTextColor(51, 65, 85)
-      const lines = doc.splitTextToSize(`•  ${item}`, TW - 14)
-      doc.text(lines, ML + 8, y + 15 + i * 11)
-    })
-    y += itemsH + 6
-  })
-
-  // ── 6. RISK ASSESSMENT ────────────────────────────────────────────────────
-  checkPage(40)
-  sectionHeader('Risk Assessment', '6')
-
-  const riskDesc = {
-    HIGH: `The current detection data indicates a HIGH risk level. With ${criticalCount} critical and ${highCount} high-severity events recorded, immediate agronomic intervention is essential to prevent significant yield loss. Affected zones should be treated within 24 hours.`,
-    MEDIUM: `The current detection data indicates a MEDIUM risk level. ${highCount} high-severity detection${highCount !== 1 ? 's' : ''} require attention within 48 hours. Timely treatment and continued monitoring will prevent escalation to critical status.`,
-    LOW: `The current detection data indicates a LOW risk level. Detections are minimal and within manageable thresholds. Continue routine monitoring and standard integrated pest management protocols.`,
+        })
+    drawTable(
+        ['#', 'Date / Time', 'Detected Species / Class', 'Type', 'Confidence', 'Severity', 'Field Location'],
+        logRows,
+        [10, 34, 44, 18, 20, 22, 22]
+    )
+    if (detections.length > 30) {
+      txt(`… and ${detections.length - 30} additional records not displayed. Access full dataset in the AgriVision system.`, ML, y, { size: 7, italic: true, color: [130, 130, 130] })
+      y += 8
+    }
   }
 
-  const riskLevels = [
-    { label: 'Low', color: [22, 163, 74], active: overallRisk === 'LOW' },
-    { label: 'Medium', color: [217, 119, 6], active: overallRisk === 'MEDIUM' },
-    { label: 'High', color: [220, 38, 38], active: overallRisk === 'HIGH' },
-  ]
+  // ── SECTION 8: Recommendations & Required Actions ──
+  sectionHeader('Recommendations and Required Actions', '8')
+  const recommendations = []
 
-  // Risk gauge bar
-  const gaugeW = TW
-  const segW = gaugeW / 3
-  riskLevels.forEach((r, i) => {
-    doc.setFillColor(...(r.active ? r.color : [229, 231, 235]))
-    // Use plain rect to avoid jsPDF per-corner radius limitation
-    doc.rect(ML + i * segW + (i > 0 ? 1 : 0), y, segW - (i < 2 ? 1 : 0), 10, 'F')
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(7.5)
-    doc.setTextColor(r.active ? 255 : 156, r.active ? 255 : 163, r.active ? 255 : 175)
-    doc.text(r.label, ML + i * segW + segW / 2, y + 6.5, { align: 'center' })
+  if (criticalCount > 0) {
+    recommendations.push({
+      priority: 'IMMEDIATE',
+      color: [185, 28, 28],
+      action: `${criticalCount} CRITICAL detection${criticalCount > 1 ? 's' : ''} recorded. Deploy field response team immediately. Notify Regional Plant Health Officer (RPHO) and submit Pest Outbreak Notification Form (DA-BPI Form 3A) within 24 hours. Apply registered pesticide per BPI pest management guidelines.`
+    })
+  }
+  if (highCount - criticalCount > 0) {
+    recommendations.push({
+      priority: 'URGENT (24–48 HRS)',
+      color: [180, 70, 10],
+      action: `${highCount - criticalCount} HIGH-severity detection${(highCount-criticalCount) > 1 ? 's' : ''} require scheduled treatment. Coordinate with local agricultural technician. Prepare IPM Treatment Plan and document actions taken.`
+    })
+  }
+  if (moderateCount > 0) {
+    recommendations.push({
+      priority: 'PRECAUTIONARY',
+      color: [133, 100, 0],
+      action: `${moderateCount} MODERATE-level detection${moderateCount > 1 ? 's' : ''} identified. Increase monitoring frequency to twice weekly. Prepare contingency treatment plan. Conduct farmer advisory.`
+    })
+  }
+  if (lowCount > 0) {
+    recommendations.push({
+      priority: 'ROUTINE',
+      color: [21, 128, 61],
+      action: `${lowCount} LOW-severity detection${lowCount > 1 ? 's' : ''} recorded. Continue standard monitoring schedule. Document field observations in PRIME Collect App. No immediate intervention required.`
+    })
+  }
+  if (recommendations.length === 0) {
+    recommendations.push({
+      priority: 'NO ACTION',
+      color: [21, 128, 61],
+      action: 'No detections recorded in this period. Maintain standard monitoring schedule and submit nil report to BPI-PRIME coordinator.'
+    })
+  }
+
+  recommendations.forEach((rec, i) => {
+    checkPage(20)
+    rect(ML, y, CW, 16, [250, 250, 250], [220, 220, 220], 2)
+    rect(ML, y, 4, 16, rec.color, null, 0)
+    badge(rec.priority, ML + 8, y + 7, rec.color)
+    const actionLines = doc.splitTextToSize(rec.action, CW - 16)
+    actionLines.forEach((l, li) => {
+      txt(l, ML + 8, y + 12 + li * 4.5, { size: 8, color: [40, 40, 40] })
+    })
+    y += Math.max(18, actionLines.length * 4.5 + 14)
   })
-  y += 14
+  y += 4
 
-  doc.setFillColor(248, 250, 252)
-  doc.setDrawColor(226, 232, 240)
-  doc.setLineWidth(0.3)
-  const riskLines = doc.splitTextToSize(riskDesc[overallRisk], TW - 10)
-  const riskBlockH = riskLines.length * 5 + 10
-  doc.roundedRect(ML, y, TW, riskBlockH, 2, 2, 'FD')
-  doc.setFillColor(...riskColor)
-  doc.rect(ML, y, 3, riskBlockH, 'F')
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(8.5)
-  doc.setTextColor(51, 65, 85)
-  doc.text(riskLines, ML + 8, y + 8)
-  y += riskBlockH + 8
-
-  // ── 7. SYSTEM INFORMATION ─────────────────────────────────────────────────
+  // General standing recommendations
   checkPage(40)
-  sectionHeader('System Information', '7')
-
-  const sysInfo = [
-    ['System Name', 'AgriVision Field Monitoring System'],
-    ['Model Used', 'YOLOv8n (You Only Look Once — Nano variant)'],
-    ['Detection Method', 'Image-based real-time object detection'],
-    ['Report Version', 'v2.1.0'],
-    ['Report Generated By', 'AgriVision Automated Report Engine'],
+  txt('Standing Field Monitoring Requirements (per BPI Circular 2020-001):', ML, y, { size: 8, bold: true, color: [40, 40, 40] })
+  y += 6
+  const standing = [
+    '1. Submit completed PRIME monitoring data sheets to the DA-BPI Regional Coordinator within 3 days of each survey cycle.',
+    '2. Maintain field logbook entries for all observations, including nil (negative) findings.',
+    '3. Conduct weekly monitoring at a minimum; increase to twice-weekly during outbreak periods.',
+    '4. Coordinate with the local Agricultural Extension Worker (AEW) before applying any chemical treatment.',
+    '5. Report any new or unusual pest or disease signs immediately to the DA-RFO Plant Health Division.',
   ]
-
-  const infoColW = [50, TW - 50]
-  sysInfo.forEach(([key, val], i) => {
-    checkPage(10)
-    doc.setFillColor(i % 2 === 0 ? 248 : 255, i % 2 === 0 ? 250 : 255, i % 2 === 0 ? 252 : 255)
-    doc.setDrawColor(241, 245, 249)
-    doc.setLineWidth(0.2)
-    doc.rect(ML, y, TW, 9, 'FD')
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(7.5)
-    doc.setTextColor(71, 85, 105)
-    doc.text(key, ML + 3, y + 6.2)
-    doc.setFont('helvetica', 'normal')
-    doc.setTextColor(15, 23, 42)
-    doc.text(val, ML + infoColW[0] + 3, y + 6.2)
-    y += 9
+  standing.forEach(s => {
+    checkPage(9)
+    const sl = doc.splitTextToSize(s, CW - 6)
+    sl.forEach((l, li) => {
+      txt(l, ML + 3, y + li * 4.5, { size: 8, color: [60, 60, 60] })
+    })
+    y += sl.length * 4.5 + 2
   })
   y += 6
 
-  // Limitations box
-  checkPage(30)
-  doc.setFillColor(255, 251, 235)
-  doc.setDrawColor(253, 230, 138)
-  doc.setLineWidth(0.3)
-  doc.roundedRect(ML, y, TW, 24, 2, 2, 'FD')
-  doc.setFillColor(217, 119, 6)
-  doc.rect(ML, y, 3, 24, 'F')
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(8)
-  doc.setTextColor(180, 83, 9)
-  doc.text('System Limitations', ML + 8, y + 7)
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(7.5)
-  doc.setTextColor(92, 45, 3)
-  doc.text('•  Detection accuracy depends on image quality, lighting conditions, and camera angle.', ML + 8, y + 13.5)
-  doc.text('•  Only classes included in the training dataset can be identified by the model.', ML + 8, y + 19.5)
-  y += 30
+  // ── SECTION 9: Certification Block ──
+  sectionHeader('Certification and Approval', '9')
+  checkPage(50)
 
-  // ── FOOTER on all pages ───────────────────────────────────────────────────
+  const certBoxes = [
+    { label: 'Prepared by', role: 'Field Monitoring Officer', name: userInfo.name || '___________________________' },
+    { label: 'Reviewed by', role: 'IPM Program Coordinator', name: userInfo.reviewer || '___________________________' },
+    { label: 'Noted by', role: 'Regional Plant Health Officer', name: userInfo.supervisor || '___________________________' },
+  ]
+  const certW = (CW - 8) / 3
+  certBoxes.forEach((cb, i) => {
+    const cx = ML + i * (certW + 4)
+    rect(cx, y, certW, 38, [248, 250, 248], [210, 225, 210], 2)
+    txt(cb.label.toUpperCase(), cx + 5, y + 7, { size: 7, bold: true, color: [14, 110, 60] })
+    line(cx + 5, y + 23, cx + certW - 5, y + 23, [160, 160, 160], 0.4)
+    txt(cb.name, cx + certW / 2, y + 28, { size: 8, bold: true, color: [30, 30, 30], align: 'center' })
+    txt(cb.role, cx + certW / 2, y + 34, { size: 7, color: [100, 100, 100], align: 'center' })
+  })
+  y += 46
+
+  // Official stamp note
+  checkPage(18)
+  rect(ML, y, CW, 14, [245, 248, 245], [200, 220, 200], 2)
+  txt('This report is an official record of the AgriVision AI Pest Surveillance System and is filed in accordance with DA Department Order No. 16, Series of 2020 (Digital Agriculture Framework). It shall be retained for a minimum of five (5) years in the field station records management system.', ML + 5, y + 5, { size: 7, italic: true, color: [80, 100, 80], maxW: CW - 10, lineHeight: 4 })
+  y += 18
+
+  // ── Add footers to all pages ──
   const totalPages = doc.internal.getNumberOfPages()
   for (let p = 1; p <= totalPages; p++) {
-    doc.setPage(p)
-    // Footer bar
-    doc.setFillColor(16, 124, 66)
-    doc.rect(0, H - 12, W, 12, 'F')
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(6.5)
-    doc.setTextColor(187, 247, 208)
-    doc.text('Generated by AgriVision  •  Pest & Disease Field Monitoring System  •  v2.1.0', ML, H - 5)
-    doc.setFont('helvetica', 'normal')
-    doc.setTextColor(255, 255, 255)
-    doc.text(`${timestamp}  •  Page ${p} of ${totalPages}`, W - MR, H - 5, { align: 'right' })
-
-    // Page number badge
-    doc.setFillColor(255, 255, 255)
-    doc.circle(W / 2, H - 6, 3.5, 'F')
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(6)
-    doc.setTextColor(16, 124, 66)
-    doc.text(String(p), W / 2, H - 4.2, { align: 'center' })
-
-    // Confidential watermark top-right (light)
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(7)
-    doc.setTextColor(200, 200, 200)
-    doc.text('CONFIDENTIAL', W - MR, MT + 2, { align: 'right' })
+    drawFooter(p, totalPages)
   }
+
+  // ── Auto-download ──
+  const filename = `AgriVision_Surveillance_Report_${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${reportId}.pdf`
+  doc.save(filename)
 
   return doc
 }
@@ -822,29 +770,39 @@ function MetricsHelpModal({ open, onClose }) {
   }, [open, onClose])
   if (!open) return null
   return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-           style={{ background: 'rgba(15,23,42,0.35)', backdropFilter: 'blur(6px)' }}
-           onClick={onClose}>
-        <div onClick={e => e.stopPropagation()}
-             style={{ background: 'rgba(255,255,255,0.97)', border: '1px solid rgba(226,232,240,0.8)', borderRadius: 20, boxShadow: '0 32px 80px rgba(0,0,0,0.16)', width: '100%', maxWidth: 520, maxHeight: '82vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 24px 18px', borderBottom: '1px solid #f1f5f9', flexShrink: 0 }}>
+      <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(15,23,42,0.35)', backdropFilter: 'blur(6px)' }}
+          onMouseDown={onClose}
+      >
+        <div
+            onMouseDown={e => e.stopPropagation()}
+            style={{ background: 'rgba(255,255,255,0.97)', border: '1px solid #26262610', borderRadius: 20, boxShadow: '0 32px 80px rgba(0,0,0,0.16)', width: '100%', maxWidth: 520, maxHeight: '82vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '22px 26px 20px', borderBottom: '1px solid #26262610', flexShrink: 0 }}>
             <div>
-              <p style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#0f172a', letterSpacing: '-0.02em' }}>Key Metrics Guide</p>
-              <p style={{ margin: 0, fontSize: 12, color: '#94a3b8', fontWeight: 500, marginTop: 3 }}>What each indicator means for your fields</p>
+              <p style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#262626', letterSpacing: '-0.02em' }}>Key Metrics Guide</p>
+              <p style={{ margin: 0, fontSize: 12, color: 'rgba(38,38,38,0.45)', fontWeight: 500, marginTop: 4 }}>What each indicator means for your fields</p>
             </div>
-            <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 10, border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>
+            <button
+                onClick={onClose}
+                className="w-8 h-8 rounded-[10px] flex items-center justify-center cursor-pointer"
+                style={{ background: 'transparent', border: 'none', color: '#262626' }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(38,38,38,0.08)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+            >
               <X size={15} />
             </button>
           </div>
-          <div style={{ overflowY: 'auto', padding: '20px 24px 24px', display: 'flex', flexDirection: 'column', gap: 24, scrollbarWidth: 'none' }}>
+          <div style={{ overflowY: 'auto', padding: '22px 26px 26px', display: 'flex', flexDirection: 'column', gap: 28, scrollbarWidth: 'none' }}>
             {METRICS_HELP.map(group => (
                 <div key={group.group}>
-                  <p style={{ margin: 0, marginBottom: 12, fontSize: 11, fontWeight: 800, color: '#64748b', letterSpacing: '0.1em', textTransform: 'uppercase' }}>{group.group}</p>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <p style={{ margin: 0, marginBottom: 14, fontSize: 15, fontWeight: 800, color: '#262626' }}>{group.group}</p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                     {group.items.map(item => (
                         <div key={item.name}>
-                          <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>{item.name}</p>
-                          <p style={{ margin: 0, fontSize: 13, color: '#64748b', lineHeight: 1.6 }}>{item.desc}</p>
+                          <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: 'rgba(38,38,38,0.6)', marginBottom: 4 }}>{item.name}</p>
+                          <p style={{ margin: 0, fontSize: 13, color: 'rgba(38,38,38,0.45)', lineHeight: 1.6 }}>{item.desc}</p>
                         </div>
                     ))}
                   </div>
@@ -880,28 +838,11 @@ function UploadImageModal({ open, onClose }) {
       reader.onload = async (e) => {
         const base64 = e.target.result.split(',')[1]
         try {
-          const { default: api } = await import('../api/api')
-          const res = await api.post('/api/detection', { image: base64 })
+          const res = await api.post('/api/detection', { image: base64, source: 'upload' })
           const dets = res.data?.data?.detections ?? []
           setResult({ detections: dets, count: dets.length })
-
-          if (dets.length > 0) {
-            const nowIso = new Date().toISOString()
-            const existing = JSON.parse(localStorage.getItem(SHARED_DETECTIONS_KEY) || '[]')
-            const newRecs = dets.map((d, idx) => ({
-              id: `upload-${Date.now()}-${idx}`,
-              timestamp: nowIso,
-              type: PEST_KEYWORDS.some(k => (d.class||'').toLowerCase().includes(k)) ? 'Pest' : 'Disease',
-              class: d.class ?? 'Unknown',
-              name: d.class ?? 'Unknown',
-              confidence: d.confidence ?? 0,
-              location: 'Uploaded Image',
-              source: 'upload',
-            }))
-            localStorage.setItem(SHARED_DETECTIONS_KEY, JSON.stringify([...newRecs, ...existing].slice(0, 500)))
-          }
         } catch {
-          setError('Detection API unavailable. Image saved for manual review.')
+          setError('Detection API unavailable. Please try again.')
           setResult({ detections: [], count: 0 })
         }
         setUploading(false)
@@ -914,7 +855,6 @@ function UploadImageModal({ open, onClose }) {
   }
 
   const reset = () => { setFile(null); setResult(null); setError(null) }
-
   useEffect(() => { if (!open) reset() }, [open])
   if (!open) return null
 
@@ -922,18 +862,17 @@ function UploadImageModal({ open, onClose }) {
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
            style={{ background: 'rgba(15,23,42,0.4)', backdropFilter: 'blur(8px)' }}
            onClick={onClose}>
-        <div onClick={e => e.stopPropagation()}
-             className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden">
-          <div className="px-8 pt-7 pb-5 border-b border-slate-100 flex items-center justify-between">
+        <div onClick={e => e.stopPropagation()} className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden">
+          <div style={{ padding: '24px 28px 22px', borderBottom: '1px solid #26262610', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
-              <p className="text-xs font-bold tracking-widest text-emerald-600 uppercase mb-1">Field Monitoring</p>
-              <h2 className="text-lg font-black text-slate-900 tracking-tight">Upload Image for Detection</h2>
+              <p style={{ margin: 0, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: 'rgba(38,38,38,0.45)', textTransform: 'uppercase', marginBottom: 4 }}>Field Monitoring</p>
+              <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#262626', letterSpacing: '-0.02em' }}>Upload Image for Detection</h2>
             </div>
-            <button onClick={onClose} className="w-8 h-8 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors">
+            <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 12, border: '1px solid #26262610', background: 'rgba(38,38,38,0.04)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(38,38,38,0.45)', cursor: 'pointer' }}>
               <X size={15} />
             </button>
           </div>
-          <div className="px-8 py-7 space-y-5">
+          <div style={{ padding: '24px 28px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
             {!result ? (
                 <>
                   <div
@@ -941,58 +880,58 @@ function UploadImageModal({ open, onClose }) {
                       onDragLeave={() => setDragging(false)}
                       onDrop={e => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]) }}
                       onClick={() => inputRef.current?.click()}
-                      className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all ${dragging ? 'border-emerald-400 bg-emerald-50' : file ? 'border-emerald-300 bg-emerald-50/50' : 'border-slate-200 hover:border-emerald-300 hover:bg-slate-50'}`}>
+                      style={{ border: `2px dashed ${dragging ? '#10b981' : file ? '#34d399' : '#26262615'}`, borderRadius: 16, padding: '32px 24px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s', background: dragging ? 'rgba(16,185,129,0.04)' : file ? 'rgba(52,211,153,0.04)' : 'transparent' }}>
                     <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={e => handleFile(e.target.files[0])} />
                     {file ? (
-                        <div className="space-y-2">
-                          <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center mx-auto">
-                            <CheckCircle size={20} className="text-emerald-600" />
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(16,185,129,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <CheckCircle size={20} style={{ color: '#10b981' }} />
                           </div>
-                          <p className="text-sm font-bold text-slate-800">{file.name}</p>
-                          <p className="text-xs text-slate-400">{(file.size / 1024).toFixed(1)} KB • Click to change</p>
+                          <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#262626' }}>{file.name}</p>
+                          <p style={{ margin: 0, fontSize: 11, color: 'rgba(38,38,38,0.4)' }}>{(file.size / 1024).toFixed(1)} KB · Click to change</p>
                         </div>
                     ) : (
-                        <div className="space-y-3">
-                          <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center mx-auto">
-                            <Upload size={20} className="text-slate-400" />
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                          <div style={{ width: 40, height: 40, borderRadius: 12, background: '#26262608', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <Upload size={20} style={{ color: 'rgba(38,38,38,0.35)' }} />
                           </div>
                           <div>
-                            <p className="text-sm font-semibold text-slate-600">Drop image here or click to browse</p>
-                            <p className="text-xs text-slate-400 mt-1">JPG, PNG, WebP supported</p>
+                            <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'rgba(38,38,38,0.6)' }}>Drop image here or click to browse</p>
+                            <p style={{ margin: 0, fontSize: 11, color: 'rgba(38,38,38,0.35)', marginTop: 4 }}>JPG, PNG, WebP supported</p>
                           </div>
                         </div>
                     )}
                   </div>
                   {error && (
-                      <div className="flex items-start gap-2 bg-red-50 border border-red-100 rounded-xl px-4 py-3">
-                        <AlertCircle size={15} className="text-red-400 mt-0.5 flex-shrink-0" />
-                        <p className="text-xs text-red-600">{error}</p>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: '10px 14px' }}>
+                        <AlertCircle size={15} style={{ color: '#f87171', marginTop: 1, flexShrink: 0 }} />
+                        <p style={{ margin: 0, fontSize: 12, color: '#dc2626' }}>{error}</p>
                       </div>
                   )}
                   <button onClick={handleUpload} disabled={!file || uploading}
-                          className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-2xl transition-colors">
+                          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: '#262626', border: 'none', color: 'white', fontWeight: 700, fontSize: 13, padding: '12px 0', borderRadius: 14, cursor: file && !uploading ? 'pointer' : 'not-allowed', opacity: !file || uploading ? 0.4 : 1, transition: 'opacity 0.2s' }}>
                     {uploading ? <><Loader2 size={16} className="animate-spin" />Analyzing Image…</> : <><Upload size={16} />Run Detection</>}
                   </button>
                 </>
             ) : (
-                <div className="space-y-4">
-                  <div className={`rounded-2xl p-5 text-center ${result.count > 0 ? 'bg-emerald-50 border border-emerald-100' : 'bg-slate-50 border border-slate-100'}`}>
-                    <p className="text-3xl font-black text-slate-900">{result.count}</p>
-                    <p className="text-sm text-slate-500 mt-1">{result.count === 1 ? 'detection found' : 'detections found'}</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div style={{ borderRadius: 16, padding: '20px', textAlign: 'center', background: result.count > 0 ? 'rgba(16,185,129,0.05)' : '#26262604', border: `1px solid ${result.count > 0 ? 'rgba(16,185,129,0.15)' : '#26262610'}` }}>
+                    <p style={{ margin: 0, fontSize: 32, fontWeight: 800, color: '#262626', lineHeight: 1 }}>{result.count}</p>
+                    <p style={{ margin: 0, fontSize: 13, color: 'rgba(38,38,38,0.45)', marginTop: 6 }}>{result.count === 1 ? 'detection found' : 'detections found'}</p>
                   </div>
                   {result.detections.length > 0 && (
-                      <div className="space-y-2">
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {result.detections.map((d, i) => (
-                            <div key={i} className="flex items-center justify-between px-4 py-3 bg-slate-50 rounded-xl">
-                              <span className="text-sm font-semibold text-slate-800">{d.class ?? 'Unknown'}</span>
-                              <span className="text-xs font-bold text-slate-500">{Math.round((d.confidence ?? 0) * 100)}% confidence</span>
+                            <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: '#26262604', borderRadius: 12, border: '1px solid #26262608' }}>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: '#262626' }}>{d.class ?? 'Unknown'}</span>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(38,38,38,0.45)' }}>{Math.round((d.confidence ?? 0) * 100)}% confidence</span>
                             </div>
                         ))}
                       </div>
                   )}
-                  <div className="flex gap-3">
-                    <button onClick={reset} className="flex-1 py-2.5 rounded-2xl bg-slate-100 text-slate-600 font-semibold text-sm hover:bg-slate-200 transition-colors">Upload Another</button>
-                    <button onClick={onClose} className="flex-1 py-2.5 rounded-2xl bg-slate-900 text-white font-semibold text-sm hover:bg-slate-800 transition-colors">Done</button>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <button onClick={reset} style={{ flex: 1, padding: '11px 0', borderRadius: 14, border: '1px solid #26262610', background: '#26262606', color: 'rgba(38,38,38,0.7)', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>Upload Another</button>
+                    <button onClick={onClose} style={{ flex: 1, padding: '11px 0', borderRadius: 14, border: 'none', background: '#262626', color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Done</button>
                   </div>
                 </div>
             )}
@@ -1092,24 +1031,24 @@ function FloatingTooltip({ hoverPos, data, hoverIdx, severityData, activeKeys, g
 
   return (
       <div className="fixed pointer-events-none z-50" style={{ left: pos.x, top: pos.y, transform: `translateY(-50%) ${flipLeft ? 'translateX(calc(-100% - 20px))' : 'translateX(20px)'}`, opacity: visible ? 1 : 0, transition: 'opacity 0.18s ease' }}>
-        <div style={{ background: 'rgba(248,250,252,0.78)', backdropFilter: 'blur(36px) saturate(220%)', border: '1px solid rgba(255,255,255,0.7)', borderRadius: 18, boxShadow: '0 20px 60px rgba(0,0,0,0.12)', padding: '14px 16px', minWidth: 180 }}>
-          <div style={{ marginBottom: 10, paddingBottom: 9, borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
-            <p style={{ fontSize: 12, fontWeight: 700, color: '#0f172a', margin: 0 }}>{label}</p>
+        <div style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(36px) saturate(220%)', border: '1px solid #26262610', borderRadius: 18, boxShadow: '0 20px 60px rgba(0,0,0,0.10)', padding: '14px 16px', minWidth: 180 }}>
+          <div style={{ marginBottom: 10, paddingBottom: 9, borderBottom: '1px solid #26262608' }}>
+            <p style={{ fontSize: 12, fontWeight: 700, color: '#262626', margin: 0 }}>{label}</p>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {SEVERITY_CONFIG.map(s => {
               if (!activeKeys.has(s.key)) return null
-              const val  = severityData[s.key][hoverIdx]
+              const val = severityData[s.key][hoverIdx]
               const rate = growthRate(severityData[s.key], hoverIdx)
               const isUp = rate !== null && Number(rate) >= 0
               return (
                   <div key={s.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.color, flexShrink: 0, display: 'block' }} />
-                      <span style={{ fontSize: 11, color: '#475569', fontWeight: 500 }}>{s.key}</span>
+                      <span style={{ fontSize: 11, color: 'rgba(38,38,38,0.55)', fontWeight: 500 }}>{s.key}</span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', fontVariantNumeric: 'tabular-nums' }}>{val}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#262626', fontVariantNumeric: 'tabular-nums' }}>{val}</span>
                       {rate !== null && (
                           <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 100, color: isUp ? '#dc2626' : '#16a34a' }}>
                       {isUp ? '↑' : '↓'}{Math.abs(rate)}%
@@ -1121,44 +1060,11 @@ function FloatingTooltip({ hoverPos, data, hoverIdx, severityData, activeKeys, g
             })}
           </div>
           {hoverIdx > 0 && (
-              <p style={{ fontSize: 9, color: 'rgba(148,163,184,0.65)', marginTop: 10, paddingTop: 9, borderTop: '1px solid rgba(0,0,0,0.05)', marginBottom: 0, fontWeight: 500 }}>
+              <p style={{ fontSize: 9, color: 'rgba(38,38,38,0.3)', marginTop: 10, paddingTop: 9, borderTop: '1px solid #26262606', marginBottom: 0, fontWeight: 500 }}>
                 % change vs previous {data.sublabel.toLowerCase()}
               </p>
           )}
         </div>
-      </div>
-  )
-}
-
-function GhostDropdown({ label, options, value, onChange, open, onToggle, onClose }) {
-  const ref = useRef(null)
-  useEffect(() => {
-    if (!open) return
-    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose() }
-    document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [open, onClose])
-
-  return (
-      <div ref={ref} className="relative" onClick={e => e.stopPropagation()}>
-        <button onClick={onToggle}
-                style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', cursor: 'pointer', padding: '5px 8px', borderRadius: 8, transition: 'background 0.15s ease', color: '#334155' }}
-                onMouseEnter={e => e.currentTarget.style.background = '#f1f5f9'}
-                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-          <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</span>
-          <ChevronDown size={12} style={{ color: '#94a3b8', flexShrink: 0, transform: open ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s ease' }} />
-        </button>
-        {open && (
-            <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 40, background: 'white', border: '1px solid #f1f5f9', borderRadius: 16, boxShadow: '0 8px 32px rgba(0,0,0,0.10)', padding: '6px', minWidth: 180 }}>
-              {options.map(opt => (
-                  <button key={opt} onClick={() => { onChange(opt); onClose() }}
-                          style={{ width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 13, fontWeight: 500, cursor: 'pointer', border: 'none', borderRadius: 10, background: value === opt ? '#f0fdf4' : 'transparent', color: value === opt ? '#15803d' : '#475569', transition: 'background 0.12s ease', display: 'block' }}
-                          onMouseEnter={e => { if (value !== opt) e.currentTarget.style.background = '#f8fafc' }}
-                          onMouseLeave={e => { if (value !== opt) e.currentTarget.style.background = 'transparent' }}
-                  >{opt}</button>
-              ))}
-            </div>
-        )}
       </div>
   )
 }
@@ -1178,24 +1084,24 @@ function DateRangeDropdown({ range, onChange, open, onToggle, onClose }) {
   return (
       <div ref={ref} className="relative" onClick={e => e.stopPropagation()}>
         <button onClick={onToggle}
-                style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'transparent', border: 'none', cursor: 'pointer', padding: '5px 8px', borderRadius: 8, transition: 'background 0.15s ease' }}
-                onMouseEnter={e => e.currentTarget.style.background = '#f1f5f9'}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'transparent', border: 'none', cursor: 'pointer', padding: '6px 10px', borderRadius: 10, transition: 'background 0.15s ease' }}
+                onMouseEnter={e => e.currentTarget.style.background = '#26262606'}
                 onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
           <div style={{ textAlign: 'right' }}>
-            <p style={{ fontSize: 13, fontWeight: 600, color: '#334155', margin: 0, whiteSpace: 'nowrap', lineHeight: 1.2 }}>{current.date}</p>
-            <p style={{ fontSize: 10, color: '#94a3b8', margin: 0, marginTop: 2, fontWeight: 500, lineHeight: 1 }}>{current.days}</p>
+            <p style={{ fontSize: 13, fontWeight: 600, color: '#262626', margin: 0, whiteSpace: 'nowrap', lineHeight: 1.2 }}>{current.date}</p>
+            <p style={{ fontSize: 10, color: 'rgba(38,38,38,0.4)', margin: 0, marginTop: 2, fontWeight: 500, lineHeight: 1 }}>{current.days}</p>
           </div>
-          <ChevronDown size={12} style={{ color: '#94a3b8', flexShrink: 0, transform: open ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s ease' }} />
+          <ChevronDown size={12} style={{ color: 'rgba(38,38,38,0.4)', flexShrink: 0, transform: open ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s ease' }} />
         </button>
         {open && (
-            <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 40, background: 'white', border: '1px solid #f1f5f9', borderRadius: 16, boxShadow: '0 8px 32px rgba(0,0,0,0.10)', padding: '6px', minWidth: 200 }}>
+            <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', zIndex: 40, background: 'white', border: '1px solid #26262610', borderRadius: 16, boxShadow: '0 8px 32px rgba(0,0,0,0.08)', padding: '6px', minWidth: 200 }}>
               {ranges.map(r => (
                   <button key={r.label} onClick={() => { onChange(r.label); onClose() }}
-                          style={{ width: '100%', textAlign: 'left', padding: '9px 12px', fontSize: 13, cursor: 'pointer', border: 'none', borderRadius: 10, background: range === r.label ? '#f0fdf4' : 'transparent', color: range === r.label ? '#15803d' : '#475569', transition: 'background 0.12s ease', display: 'flex', flexDirection: 'column', gap: 2 }}
-                          onMouseEnter={e => { if (range !== r.label) e.currentTarget.style.background = '#f8fafc' }}
+                          style={{ width: '100%', textAlign: 'left', padding: '10px 14px', fontSize: 13, cursor: 'pointer', border: 'none', borderRadius: 10, background: range === r.label ? '#26262608' : 'transparent', color: range === r.label ? '#262626' : 'rgba(38,38,38,0.6)', transition: 'background 0.12s ease', display: 'flex', flexDirection: 'column', gap: 2 }}
+                          onMouseEnter={e => { if (range !== r.label) e.currentTarget.style.background = '#26262604' }}
                           onMouseLeave={e => { if (range !== r.label) e.currentTarget.style.background = 'transparent' }}>
-                    <span style={{ fontWeight: 600, fontSize: 12 }}>{r.label}</span>
-                    <span style={{ fontSize: 10, color: '#94a3b8' }}>{r.date}</span>
+                    <span style={{ fontWeight: 600, fontSize: 12, color: range === r.label ? '#262626' : 'rgba(38,38,38,0.75)' }}>{r.label}</span>
+                    <span style={{ fontSize: 10, color: 'rgba(38,38,38,0.4)' }}>{r.date}</span>
                   </button>
               ))}
             </div>
@@ -1208,11 +1114,11 @@ function DateRangeDropdown({ range, onChange, open, onToggle, onClose }) {
 
 function DoodleGraph({ range, pest, activeView, setActiveView, pestValue, diseaseValue, setPestValue, setDiseaseValue, graphData, pestClasses, diseaseClasses }) {
   const data = graphData[range] || Object.values(graphData)[0]
-  const W = 900, H = 270, PX_L = 12, PX_R = 42, PY = 20
+  const W = 900, H = 380, PX_L = 12, PX_R = 42, PY = 24
 
   const [hoverPos, setHoverPos] = useState({ idx: null, x: 0, y: 0 })
   const [activeKeys, setActiveKeys] = useState(() => new Set(SEVERITY_CONFIG.map(s => s.key)))
-  const [pestOpen, setPestOpen]     = useState(false)
+  const [pestOpen, setPestOpen] = useState(false)
   const [diseaseOpen, setDiseaseOpen] = useState(false)
   const svgRef = useRef(null)
 
@@ -1250,7 +1156,7 @@ function DoodleGraph({ range, pest, activeView, setActiveView, pestValue, diseas
     if (!svgRef.current) return
     const rect = svgRef.current.getBoundingClientRect()
     const relX = (e.clientX - rect.left) / rect.width * W
-    const idx  = Math.max(0, Math.min(labelCount - 1, Math.round((relX - PX_L) / colW)))
+    const idx = Math.max(0, Math.min(labelCount - 1, Math.round((relX - PX_L) / colW)))
     setHoverPos({ idx, x: e.clientX, y: e.clientY })
   }, [colW, labelCount])
 
@@ -1268,31 +1174,31 @@ function DoodleGraph({ range, pest, activeView, setActiveView, pestValue, diseas
 
   return (
       <div className="flex flex-col flex-1 min-w-0 h-full">
-        <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
+        <div className="flex items-center justify-between mb-5 gap-4 flex-wrap">
           <div className="flex items-center gap-1">
             <button onClick={e => { e.stopPropagation(); setActiveView('All') }}
-                    style={{ padding: '5px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700, transition: 'background 0.15s ease', background: activeView === 'All' ? '#f1f5f9' : 'transparent', color: activeView === 'All' ? '#1e293b' : '#94a3b8' }}
-                    onMouseEnter={e => { if (activeView !== 'All') e.currentTarget.style.background = '#f8fafc' }}
+                    style={{ padding: '5px 12px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700, transition: 'background 0.15s ease', background: activeView === 'All' ? '#26262610' : 'transparent', color: activeView === 'All' ? '#262626' : 'rgba(38,38,38,0.45)' }}
+                    onMouseEnter={e => { if (activeView !== 'All') e.currentTarget.style.background = '#26262606' }}
                     onMouseLeave={e => { if (activeView !== 'All') e.currentTarget.style.background = 'transparent' }}>All</button>
 
             <div className="relative" onClick={e => e.stopPropagation()}>
               <button onClick={() => { setActiveView('Pests'); setPestOpen(o => !o); setDiseaseOpen(false) }}
-                      style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700, transition: 'background 0.15s ease', background: activeView === 'Pests' ? '#f1f5f9' : 'transparent', color: activeView === 'Pests' ? '#1e293b' : '#94a3b8' }}
-                      onMouseEnter={e => { if (activeView !== 'Pests') e.currentTarget.style.background = '#f8fafc' }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '5px 12px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700, transition: 'background 0.15s ease', background: activeView === 'Pests' ? '#26262610' : 'transparent', color: activeView === 'Pests' ? '#262626' : 'rgba(38,38,38,0.45)' }}
+                      onMouseEnter={e => { if (activeView !== 'Pests') e.currentTarget.style.background = '#26262606' }}
                       onMouseLeave={e => { if (activeView !== 'Pests') e.currentTarget.style.background = 'transparent' }}>
                 Pests
                 {pestValue && activeView === 'Pests' && <span style={{ fontSize: 9, background: '#dcfce7', color: '#15803d', padding: '1px 5px', borderRadius: 4, marginLeft: 2, fontWeight: 700 }}>{pestValue.split(' ').slice(-1)[0]}</span>}
-                <ChevronDown size={10} style={{ color: '#94a3b8', transform: pestOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
+                <ChevronDown size={10} style={{ color: 'rgba(38,38,38,0.5)', transform: pestOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
               </button>
               {pestOpen && (
-                  <div style={{ position: 'absolute', left: 0, top: 'calc(100% + 6px)', zIndex: 40, background: 'white', border: '1px solid #f1f5f9', borderRadius: 14, boxShadow: '0 8px 32px rgba(0,0,0,0.10)', padding: '6px', minWidth: 170 }}>
-                    <button onClick={() => { setPestValue(null); setPestOpen(false) }} style={{ width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 12, cursor: 'pointer', border: 'none', borderRadius: 8, background: !pestValue ? '#f0fdf4' : 'transparent', color: !pestValue ? '#15803d' : '#64748b', fontWeight: 600 }}>All Pests</button>
+                  <div style={{ position: 'absolute', left: 0, top: 'calc(100% + 6px)', zIndex: 40, background: 'white', border: '1px solid #26262610', borderRadius: 14, boxShadow: '0 8px 32px rgba(0,0,0,0.08)', padding: '6px', minWidth: 170 }}>
+                    <button onClick={() => { setPestValue(null); setPestOpen(false) }} style={{ width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 12, cursor: 'pointer', border: 'none', borderRadius: 8, background: !pestValue ? '#26262608' : 'transparent', color: !pestValue ? '#262626' : 'rgba(38,38,38,0.6)', fontWeight: 600 }}>All Pests</button>
                     {pestClasses.length === 0 ? (
-                        <p style={{ fontSize: 11, color: '#94a3b8', padding: '6px 12px', margin: 0 }}>No pest data yet</p>
+                        <p style={{ fontSize: 11, color: 'rgba(38,38,38,0.4)', padding: '6px 12px', margin: 0 }}>No pest data yet</p>
                     ) : pestClasses.map(p => (
                         <button key={p} onClick={() => { setPestValue(p); setPestOpen(false) }}
-                                style={{ width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 12, cursor: 'pointer', border: 'none', borderRadius: 8, background: pestValue === p ? '#f0fdf4' : 'transparent', color: pestValue === p ? '#15803d' : '#475569', fontWeight: 500 }}
-                                onMouseEnter={e => { if (pestValue !== p) e.currentTarget.style.background = '#f8fafc' }}
+                                style={{ width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 12, cursor: 'pointer', border: 'none', borderRadius: 8, background: pestValue === p ? '#26262608' : 'transparent', color: pestValue === p ? '#262626' : 'rgba(38,38,38,0.6)', fontWeight: 500 }}
+                                onMouseEnter={e => { if (pestValue !== p) e.currentTarget.style.background = '#26262604' }}
                                 onMouseLeave={e => { if (pestValue !== p) e.currentTarget.style.background = 'transparent' }}
                         >{p}</button>
                     ))}
@@ -1302,22 +1208,22 @@ function DoodleGraph({ range, pest, activeView, setActiveView, pestValue, diseas
 
             <div className="relative" onClick={e => e.stopPropagation()}>
               <button onClick={() => { setActiveView('Diseases'); setDiseaseOpen(o => !o); setPestOpen(false) }}
-                      style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700, transition: 'background 0.15s ease', background: activeView === 'Diseases' ? '#f1f5f9' : 'transparent', color: activeView === 'Diseases' ? '#1e293b' : '#94a3b8' }}
-                      onMouseEnter={e => { if (activeView !== 'Diseases') e.currentTarget.style.background = '#f8fafc' }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '5px 12px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700, transition: 'background 0.15s ease', background: activeView === 'Diseases' ? '#26262610' : 'transparent', color: activeView === 'Diseases' ? '#262626' : 'rgba(38,38,38,0.45)' }}
+                      onMouseEnter={e => { if (activeView !== 'Diseases') e.currentTarget.style.background = '#26262606' }}
                       onMouseLeave={e => { if (activeView !== 'Diseases') e.currentTarget.style.background = 'transparent' }}>
                 Diseases
                 {diseaseValue && activeView === 'Diseases' && <span style={{ fontSize: 9, background: '#fef9c3', color: '#a16207', padding: '1px 5px', borderRadius: 4, marginLeft: 2, fontWeight: 700 }}>{diseaseValue.split(' ').slice(-1)[0]}</span>}
-                <ChevronDown size={10} style={{ color: '#94a3b8', transform: diseaseOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
+                <ChevronDown size={10} style={{ color: 'rgba(38,38,38,0.5)', transform: diseaseOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
               </button>
               {diseaseOpen && (
-                  <div style={{ position: 'absolute', left: 0, top: 'calc(100% + 6px)', zIndex: 40, background: 'white', border: '1px solid #f1f5f9', borderRadius: 14, boxShadow: '0 8px 32px rgba(0,0,0,0.10)', padding: '6px', minWidth: 170 }}>
-                    <button onClick={() => { setDiseaseValue(null); setDiseaseOpen(false) }} style={{ width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 12, cursor: 'pointer', border: 'none', borderRadius: 8, background: !diseaseValue ? '#f0fdf4' : 'transparent', color: !diseaseValue ? '#15803d' : '#64748b', fontWeight: 600 }}>All Diseases</button>
+                  <div style={{ position: 'absolute', left: 0, top: 'calc(100% + 6px)', zIndex: 40, background: 'white', border: '1px solid #26262610', borderRadius: 14, boxShadow: '0 8px 32px rgba(0,0,0,0.08)', padding: '6px', minWidth: 170 }}>
+                    <button onClick={() => { setDiseaseValue(null); setDiseaseOpen(false) }} style={{ width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 12, cursor: 'pointer', border: 'none', borderRadius: 8, background: !diseaseValue ? '#26262608' : 'transparent', color: !diseaseValue ? '#262626' : 'rgba(38,38,38,0.6)', fontWeight: 600 }}>All Diseases</button>
                     {diseaseClasses.length === 0 ? (
-                        <p style={{ fontSize: 11, color: '#94a3b8', padding: '6px 12px', margin: 0 }}>No disease data yet</p>
+                        <p style={{ fontSize: 11, color: 'rgba(38,38,38,0.4)', padding: '6px 12px', margin: 0 }}>No disease data yet</p>
                     ) : diseaseClasses.map(d => (
                         <button key={d} onClick={() => { setDiseaseValue(d); setDiseaseOpen(false) }}
-                                style={{ width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 12, cursor: 'pointer', border: 'none', borderRadius: 8, background: diseaseValue === d ? '#f0fdf4' : 'transparent', color: diseaseValue === d ? '#15803d' : '#475569', fontWeight: 500 }}
-                                onMouseEnter={e => { if (diseaseValue !== d) e.currentTarget.style.background = '#f8fafc' }}
+                                style={{ width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 12, cursor: 'pointer', border: 'none', borderRadius: 8, background: diseaseValue === d ? '#26262608' : 'transparent', color: diseaseValue === d ? '#262626' : 'rgba(38,38,38,0.6)', fontWeight: 500 }}
+                                onMouseEnter={e => { if (diseaseValue !== d) e.currentTarget.style.background = '#26262604' }}
                                 onMouseLeave={e => { if (diseaseValue !== d) e.currentTarget.style.background = 'transparent' }}
                         >{d}</button>
                     ))}
@@ -1326,7 +1232,7 @@ function DoodleGraph({ range, pest, activeView, setActiveView, pestValue, diseas
             </div>
           </div>
 
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-4 flex-wrap">
             {SEVERITY_CONFIG.map(s => {
               const active = activeKeys.has(s.key)
               return (
@@ -1337,17 +1243,21 @@ function DoodleGraph({ range, pest, activeView, setActiveView, pestValue, diseas
                       <line x1="0" y1="3" x2="14" y2="3" stroke={s.color} strokeWidth="2"
                             strokeDasharray={s.dashed ? '4 2' : undefined} strokeLinecap="round" />
                     </svg>
-                    <span className="text-[10px] font-semibold text-slate-500">{s.key}</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>{s.key}</span>
                   </button>
               )
             })}
           </div>
         </div>
 
-        <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
-             style={{ width: '100%', height: 280, display: 'block', cursor: 'crosshair' }}
-             onMouseMove={handleMouseMove}
-             onMouseLeave={() => setHoverPos({ idx: null, x: 0, y: 0 })}>
+        <svg
+            ref={svgRef}
+            viewBox={`0 0 ${W} ${H}`}
+            preserveAspectRatio="xMidYMid meet"
+            style={{ width: '100%', height: 380, display: 'block', cursor: 'crosshair' }}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={() => setHoverPos({ idx: null, x: 0, y: 0 })}
+        >
           <defs>
             {SEVERITY_CONFIG.map(s => (
                 <linearGradient key={s.key} id={`g-${s.color.replace('#', '')}`} x1="0" y1="0" x2="0" y2="1">
@@ -1358,30 +1268,46 @@ function DoodleGraph({ range, pest, activeView, setActiveView, pestValue, diseas
           </defs>
 
           {[0, 0.25, 0.5, 0.75, 1].map(t => {
-            const yp  = PY + t * (H - PY * 2)
+            const yp = PY + t * (H - PY * 2)
             const val = (globalMax * (1 - t)).toFixed(1)
             return (
                 <g key={t}>
-                  <line x1={PX_L} x2={W - PX_R} y1={yp} y2={yp} stroke="#f1f5f9" strokeWidth="1" strokeDasharray="4 7" />
-                  <text x={W - PX_R + 10} y={yp + 4} textAnchor="start" fontSize="10" fill="#94a3b8" fontFamily="monospace" fontWeight="600">{val}</text>
+                  <line x1={PX_L} x2={W - PX_R} y1={yp} y2={yp} stroke="#26262608" strokeWidth="1" strokeDasharray="4 7" />
+                  <text
+                      x={W - PX_R + 10}
+                      y={yp + 4}
+                      textAnchor="start"
+                      fontSize="10"
+                      fill="rgba(38,38,38,0.35)"
+                  >
+                    {val}
+                  </text>
                 </g>
             )
           })}
 
           {data.labels.map((l, i) => (
-              <text key={`${l}-${i}`} x={PX_L + (i / (labelCount - 1)) * plotW} y={H - 4}
-                    textAnchor={i === 0 ? 'start' : i === labelCount - 1 ? 'end' : 'middle'}
-                    fontSize="11" fill="#94a3b8" fontFamily="monospace" fontWeight="600">{l}</text>
+              <text
+                  key={`${l}-${i}`}
+                  x={PX_L + (i / (labelCount - 1)) * plotW}
+                  y={H - 4}
+                  textAnchor={i === 0 ? 'start' : i === labelCount - 1 ? 'end' : 'middle'}
+                  fontSize="11"
+                  fill="rgba(38,38,38,0.4)"
+                  fontWeight={400}
+              >
+                {l}
+              </text>
           ))}
 
           {hoverIdx !== null && (
-              <line x1={tooltipX} x2={tooltipX} y1={PY} y2={H - PY} stroke="#e2e8f0" strokeWidth="1.5" strokeDasharray="3 4" />
+              <line x1={tooltipX} x2={tooltipX} y1={PY} y2={H - PY} stroke="#26262612" strokeWidth="1.5" strokeDasharray="3 4" />
           )}
 
           {SEVERITY_CONFIG.map((s, si) => {
             if (!activeKeys.has(s.key)) return null
             const pts = buildPts(s.key)
-            const pd  = smoothD(pts)
+            const pd = smoothD(pts)
             return (
                 <g key={s.key}>
                   <AnimatedFill d={pd} pts={pts} color={s.color} H={H} PY={PY} delay={si * 0.12} animKey={animKey} />
@@ -1403,39 +1329,75 @@ function DoodleGraph({ range, pest, activeView, setActiveView, pestValue, diseas
   )
 }
 
-// ─── Stat Cards ───────────────────────────────────────────────────────────────
+// ─── Sparkline helper ─────────────────────────────────────────────────────────
 
-function MiniStatCard({ title, value, changeLabel, loading }) {
+function buildSparkPaths(data) {
+  const W = 65, H = 20
+  const min = Math.min(...data)
+  const max = Math.max(...data)
+  const range = max - min || 1
+  const pts = data.map((v, i) => [
+    (i / (data.length - 1)) * (W - 1) + 0.5,
+    H - 0.5 - ((v - min) / range) * (H - 2),
+  ])
+  const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(' ')
+  const fillPath = `${linePath} L${pts[pts.length-1][0].toFixed(2)},${(H - 0.5).toFixed(2)} L${pts[0][0].toFixed(2)},${(H - 0.5).toFixed(2)} Z`
+  return { linePath, fillPath }
+}
+
+// ─── Spark Stat Card ──────────────────────────────────────────────────────────
+
+function SparkStatCard({ title, value, sparkData, color, trendValue, trendLabel, trendUp, loading }) {
+  const { linePath, fillPath } = sparkData?.length > 1
+      ? buildSparkPaths(sparkData)
+      : { linePath: '', fillPath: '' }
+
+  const trendIsGood = title === 'Healthy Crops' ? trendUp : !trendUp
+
   return (
-      <div style={{ background: 'white', border: '1.5px solid #f1f5f9', borderRadius: 16 }}
-           className="p-5 flex flex-col justify-between w-40 h-40">
-        <p style={{ color: '#94a3b8' }} className="text-[10px] font-bold tracking-[0.14em] uppercase leading-none m-0">
-          {title}
-        </p>
-        <div className="flex flex-col gap-2">
-          {loading ? (
-              <div className="h-9 w-14 bg-slate-100 rounded-lg animate-pulse" />
-          ) : (
-              <p style={{ color: '#0f172a' }} className="text-3xl font-black leading-none m-0 tabular-nums">
-                {value}
-              </p>
-          )}
+      <div style={{ background: 'white', border: '1px solid #26262610', borderRadius: 10, padding: '18px 20px 16px', display: 'flex', flexDirection: 'column', gap: 0, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: 'rgba(38,38,38,0.55)' }}>{title}</p>
         </div>
-        <p style={{ color: '#cbd5e1', borderTopColor: '#f1f5f9' }} className="text-[10px] m-0 font-semibold leading-none border-t pt-3">
-          {loading ? 'Loading…' : (changeLabel || 'Live data')}
-        </p>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 12 }}>
+          {loading ? (
+              <div style={{ height: 36, width: 56, background: '#26262608', borderRadius: 8, animation: 'pulse 1.5s ease-in-out infinite' }} />
+          ) : (
+              <p style={{ margin: 0, fontSize: 30, fontWeight: 800, color: '#262626', lineHeight: 1, letterSpacing: '-0.02em' }}>{value}</p>
+          )}
+          <svg viewBox="0 0 65 20" width="65" height="20" style={{ display: 'block', flexShrink: 0 }} aria-hidden="true">
+            <rect x="0" y="0" width="65" height="20" stroke="none" strokeWidth="0" fillOpacity="0" fill="#ffffff" />
+            {sparkData?.length > 1 && (
+                <>
+                  <path d={fillPath} stroke="none" strokeWidth="0" fillOpacity="0.3" fill={color} />
+                  <path d={linePath} stroke={color} strokeWidth="1" fillOpacity="1" fill="none" />
+                </>
+            )}
+          </svg>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingTop: 10, borderTop: '1px solid #26262608', marginTop: 2 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 2, fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 100, color: trendIsGood ? '#16a34a' : '#dc2626' }}>
+            {trendUp ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+            {trendValue}
+          </span>
+          <span style={{ fontSize: 11, color: 'rgba(38,38,38,0.35)', fontWeight: 500 }}>{trendLabel}</span>
+        </div>
       </div>
   )
 }
 
+// ─── Action Card ──────────────────────────────────────────────────────────────
+
 function ActionCard({ icon, title, onClick, loading }) {
   return (
       <button onClick={onClick} disabled={loading}
-              className="bg-white rounded-2xl border border-dashed border-slate-200 px-5 py-5 w-full text-left cursor-pointer flex flex-col gap-3 transition-all duration-200 hover:border-emerald-300 hover:bg-emerald-50 hover:-translate-y-0.5 hover:shadow-sm disabled:opacity-60 disabled:cursor-not-allowed">
-      <span className="text-emerald-600 opacity-80 flex">
-        {loading ? <Loader2 size={22} className="animate-spin" /> : icon}
-      </span>
-        <span className="text-sm font-semibold text-slate-600 leading-snug">{title}</span>
+              style={{ background: 'white', borderRadius: 14, border: '1.5px dashed #26262615', padding: '18px 16px', width: '100%', textAlign: 'left', cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', flexDirection: 'column', gap: 12, transition: 'all 0.2s', opacity: loading ? 0.6 : 1 }}
+              onMouseEnter={e => { if (!loading) { e.currentTarget.style.borderColor = '#10b981'; e.currentTarget.style.background = 'rgba(16,185,129,0.03)'; e.currentTarget.style.transform = 'translateY(-2px)' } }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = '#26262615'; e.currentTarget.style.background = 'white'; e.currentTarget.style.transform = 'translateY(0)' }}>
+        <span style={{ color: '#10b981', opacity: 0.85, display: 'flex' }}>
+          {loading ? <Loader2 size={22} className="animate-spin" /> : icon}
+        </span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(38,38,38,0.65)', lineHeight: 1.4 }}>{title}</span>
       </button>
   )
 }
@@ -1449,21 +1411,49 @@ function Toast({ message, type, onClose }) {
   }, [onClose])
 
   const colors = {
-    success: { bg: '#f0fdf4', border: '#bbf7d0', text: '#15803d', icon: <CheckCircle size={16} className="text-emerald-600 flex-shrink-0" /> },
-    error:   { bg: '#fef2f2', border: '#fecaca', text: '#b91c1c', icon: <AlertCircle size={16} className="text-red-500 flex-shrink-0" /> },
-    info:    { bg: '#eff6ff', border: '#bfdbfe', text: '#1d4ed8', icon: <Loader2 size={16} className="text-blue-500 flex-shrink-0 animate-spin" /> },
+    success: { bg: '#f0fdf4', border: '#26262610', text: '#262626', icon: <CheckCircle size={16} style={{ color: '#10b981', flexShrink: 0 }} /> },
+    error:   { bg: '#fef2f2', border: '#26262610', text: '#262626', icon: <AlertCircle size={16} style={{ color: '#ef4444', flexShrink: 0 }} /> },
+    info:    { bg: '#f8fafc',  border: '#26262610', text: '#262626', icon: <Loader2 size={16} style={{ color: 'rgba(38,38,38,0.5)', flexShrink: 0 }} className="animate-spin" /> },
   }
   const c = colors[type] || colors.info
 
   return (
-      <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 rounded-2xl shadow-xl border text-sm font-semibold max-w-sm"
-           style={{ background: c.bg, borderColor: c.border, color: c.text, animation: 'slideUp 0.3s ease' }}>
+      <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 50, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderRadius: 16, boxShadow: '0 8px 32px rgba(0,0,0,0.10)', border: `1px solid ${c.border}`, background: c.bg, color: c.text, fontSize: 13, fontWeight: 600, maxWidth: 360, animation: 'slideUp 0.3s ease' }}>
         <style>{`@keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}`}</style>
         {c.icon}
         <span>{message}</span>
-        <button onClick={onClose} className="ml-2 opacity-60 hover:opacity-100"><X size={14} /></button>
+        <button onClick={onClose} style={{ marginLeft: 8, opacity: 0.4, background: 'none', border: 'none', cursor: 'pointer', color: '#262626', padding: 0, display: 'flex' }}
+                onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                onMouseLeave={e => e.currentTarget.style.opacity = '0.4'}>
+          <X size={14} />
+        </button>
       </div>
   )
+}
+
+// ─── Build sparkline data from detections list ────────────────────────────────
+
+function buildSparklineData(detectionsList, rangeKey) {
+  const buckets = buildRangeBuckets()
+  const bucket = buckets[rangeKey] || buckets['This week']
+  const detCounts   = Array(bucket.bucketCount).fill(0)
+  const alertCounts = Array(bucket.bucketCount).fill(0)
+
+  detectionsList.forEach(det => {
+    if (!det.timestamp) return
+    const bi = bucket.getBucket(det.timestamp)
+    if (bi < 0) return
+    detCounts[bi]++
+    if (det.severity === 'high' || det.severity === 'critical') alertCounts[bi]++
+  })
+
+  const cropLossVals = detCounts.map((v, i) => {
+    const h = alertCounts[i]
+    return v > 0 ? Math.min(99, Math.round((h * 4 + (v - h) * 1.2) / Math.max(v, 1) * 100) / 10) : 0
+  })
+  const healthVals = cropLossVals.map(cl => Math.max(0, Math.round(100 - cl * 2)))
+
+  return { detCounts, alertCounts, cropLossVals, healthVals }
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
@@ -1481,7 +1471,6 @@ export default function Dashboard() {
   const [toast, setToast]           = useState(null)
   const [reportLoading, setReportLoading] = useState(false)
 
-  // Dynamic class lists fetched from model / derived from detections
   const [pestClasses, setPestClasses]       = useState([])
   const [diseaseClasses, setDiseaseClasses] = useState([])
 
@@ -1494,43 +1483,32 @@ export default function Dashboard() {
     loaded: false,
   })
 
-  // Graph data rebuilt whenever detectionsList changes
-  const [graphData, setGraphData] = useState(() =>
-      buildDynamicGraphData([], [])
-  )
+  const [graphData, setGraphData] = useState(() => buildDynamicGraphData([], []))
 
   const showToast = useCallback((message, type = 'info') => {
     setToast({ message, type, id: Date.now() })
   }, [])
 
-  // Track which API endpoints have returned 404 so we stop hitting them
   const apiNotFound = useRef({})
 
   const fetchLiveData = useCallback(async () => {
     let allRecords = []
-    const shared = loadSharedDetections().map((item, idx) => normalizeRecord(item, idx))
-    allRecords = [...shared]
 
     try {
-      const { default: api } = await import('../api/api')
       const noThrow = { validateStatus: () => true }
 
-      // Try to fetch model classes from dedicated endpoint first
       if (!apiNotFound.current['/api/classes']) {
         const res = await api.get('/api/classes', noThrow).catch(() => null)
         if (res?.status === 404) {
           apiNotFound.current['/api/classes'] = true
         } else if (res?.status === 200) {
           const raw = res.data?.data ?? res.data ?? {}
-          // Expects { pests: [...], diseases: [...] } OR { classes: [...] }
           if (raw.pests && raw.diseases) {
             setPestClasses(raw.pests)
             setDiseaseClasses(raw.diseases)
           } else if (Array.isArray(raw.classes)) {
-            const pests = raw.classes.filter(c => PEST_KEYWORDS.some(k => c.toLowerCase().includes(k)))
-            const diseases = raw.classes.filter(c => !PEST_KEYWORDS.some(k => c.toLowerCase().includes(k)))
-            setPestClasses(pests)
-            setDiseaseClasses(diseases)
+            setPestClasses(raw.classes.filter(c => PEST_KEYWORDS.some(k => c.toLowerCase().includes(k))))
+            setDiseaseClasses(raw.classes.filter(c => !PEST_KEYWORDS.some(k => c.toLowerCase().includes(k))))
           }
         }
       }
@@ -1552,18 +1530,17 @@ export default function Dashboard() {
           if (Array.isArray(raw)) allRecords = [...allRecords, ...raw.map(normalizeRecord)]
         }
       }
-    } catch { /* api module not available */ }
+    } catch { /* api unavailable */ }
 
     const deduped = Array.from(new Map(allRecords.map(r => [String(r.id), r])).values())
     deduped.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
 
-    // Derive classes dynamically from actual detections if API didn't provide them
     const uniqueNames = [...new Set(deduped.map(d => d.name).filter(n => n && n !== 'Unknown'))]
     const derivedPests    = uniqueNames.filter(n => PEST_KEYWORDS.some(k => n.toLowerCase().includes(k)))
     const derivedDiseases = uniqueNames.filter(n => !PEST_KEYWORDS.some(k => n.toLowerCase().includes(k)))
 
-    setPestClasses(prev => prev.length > 0 ? prev : derivedPests)
-    setDiseaseClasses(prev => prev.length > 0 ? prev : derivedDiseases)
+    if (derivedPests.length > 0)    setPestClasses(derivedPests)
+    if (derivedDiseases.length > 0) setDiseaseClasses(derivedDiseases)
 
     const total = deduped.length
     const highCount = deduped.filter(d => d.severity === 'high' || d.severity === 'critical').length
@@ -1572,10 +1549,8 @@ export default function Dashboard() {
         : 0
     const healthyCrops = Math.max(0, Math.round(100 - cropLoss * 2))
 
-    // Rebuild graph with all known class names
     const allClasses = [...new Set([...derivedPests, ...derivedDiseases, ...uniqueNames])]
     setGraphData(buildDynamicGraphData(deduped, allClasses))
-
     setLiveData({ detections: total, activeAlerts: highCount, cropLoss, healthyCrops, detectionsList: deduped, loaded: true })
   }, [])
 
@@ -1583,12 +1558,6 @@ export default function Dashboard() {
     fetchLiveData()
     const interval = setInterval(fetchLiveData, 5000)
     return () => clearInterval(interval)
-  }, [fetchLiveData])
-
-  useEffect(() => {
-    const onStorage = (e) => { if (e.key === SHARED_DETECTIONS_KEY) fetchLiveData() }
-    window.addEventListener('storage', onStorage)
-    return () => window.removeEventListener('storage', onStorage)
   }, [fetchLiveData])
 
   const navigate = (path) => {
@@ -1602,17 +1571,15 @@ export default function Dashboard() {
 
   const handleGenerateReport = async () => {
     setReportLoading(true)
-    showToast('Building AgriVision report…', 'info')
+    showToast('Compiling surveillance report…', 'info')
     try {
       const currentRange = timeRanges.find(r => r.label === range)
       const rangeLabel = currentRange ? `${currentRange.label} (${currentRange.date})` : range
-      const doc = await generateAgriVisionReport(liveData.detectionsList, rangeLabel)
-      const filename = `AgriVision_Report_${new Date().toISOString().split('T')[0]}.pdf`
-      doc.save(filename)
-      showToast('AgriVision report downloaded successfully!', 'success')
+      await generateAgriVisionReport(liveData.detectionsList, rangeLabel)
+      showToast('Surveillance report downloaded successfully!', 'success')
     } catch (e) {
-      console.error(e)
-      showToast('Failed to generate report. Please try again.', 'error')
+      console.error('Report generation error:', e)
+      showToast(`Report failed: ${e.message || 'Unknown error'}`, 'error')
     } finally {
       setReportLoading(false)
     }
@@ -1625,66 +1592,149 @@ export default function Dashboard() {
           : 'All'
 
   const isLoading = !liveData.loaded
+  const sparks = buildSparklineData(liveData.detectionsList, range)
+
+  const computeTrend = (arr) => {
+    const mid = Math.floor(arr.length / 2)
+    const prev = arr.slice(0, mid).reduce((a, b) => a + b, 0)
+    const curr = arr.slice(mid).reduce((a, b) => a + b, 0)
+    if (prev === 0) return { pct: '—', up: false }
+    const pct = Math.abs(Math.round(((curr - prev) / prev) * 100))
+    return { pct: `${pct}%`, up: curr >= prev }
+  }
+
+  const detTrend    = computeTrend(sparks.detCounts)
+  const alertTrend  = computeTrend(sparks.alertCounts)
+  const cropTrend   = computeTrend(sparks.cropLossVals)
+  const healthTrend = computeTrend(sparks.healthVals)
+
+  const currentRange = timeRanges.find(r => r.label === range)
+  const trendLabel = `in the last ${currentRange?.days || '7 days'}`
 
   return (
-      <div className="min-h-screen bg-slate-50" onClick={() => setRangeOpen(false)}>
-        <MetricsHelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
-        <UploadImageModal open={uploadOpen} onClose={() => setUploadOpen(false)} />
-        {toast && <Toast key={toast.id} message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+      <div
+          className="min-h-screen bg-white"
+          onMouseDown={() => setRangeOpen(false)}
+      >
+        <main className="max-w-screen-2xl mx-auto px-4 sm:px-4 lg:px-8 xl:px-12 py-2 lg:py-8 flex flex-col gap-10 font-sans text-[#262626]">
+          <div className="bg-white">
 
-        <main className="max-w-screen-2xl mx-auto px-4 sm:px-4 lg:px-8 xl:px-12 py-6 lg:py-10 flex flex-col gap-8">
-
-          <div className="bg-white rounded-xl border border-slate-100 shadow-sm">
-
-            {/* Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5 px-8 lg:px-10 pt-8 pb-7 border-b border-slate-50">
-              <div className="flex items-center gap-3">
-                <h2 className="text-2xl font-black text-slate-900 tracking-tight m-0 leading-none whitespace-nowrap">
-                  Key Metrics
-                </h2>
+            {/* ── Header ── */}
+            <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '28px 32px 26px', borderBottom: '1px solid #26262608' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#262626', letterSpacing: '-0.02em' }}>Key Metrics</h2>
                 <button
-                    onClick={e => { e.stopPropagation(); setHelpOpen(true) }}
-                    style={{ width: 22, height: 22, borderRadius: '50%', border: '1.5px solid #cbd5e1', background: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#94a3b8', flexShrink: 0, padding: 0 }}>
+                    onMouseDown={e => { e.preventDefault(); e.stopPropagation(); setHelpOpen(true) }}
+                    onClick={e => e.stopPropagation()}
+                    style={{ width: 22, height: 22, borderRadius: '50%', border: '1.5px solid #262626', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#262626', flexShrink: 0, padding: 0 }}
+                >
                   <span style={{ fontSize: 11, fontWeight: 800, lineHeight: 1, userSelect: 'none' }}>?</span>
                 </button>
               </div>
 
-              <div onClick={e => e.stopPropagation()}>
+              <div onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
                 <DateRangeDropdown
-                    range={range} onChange={setRange}
-                    open={rangeOpen} onToggle={() => setRangeOpen(o => !o)} onClose={() => setRangeOpen(false)}
+                    range={range}
+                    onChange={setRange}
+                    open={rangeOpen}
+                    onToggle={() => setRangeOpen(o => !o)}
+                    onClose={() => setRangeOpen(false)}
                 />
               </div>
             </div>
 
-            {/* Body */}
-            <div className="flex flex-col lg:flex-row items-stretch">
-              <div className="lg:w-[296px] flex-shrink-0 grid grid-cols-2 auto-rows-fr gap-4 p-6 border-b lg:border-b-0 lg:border-r border-slate-50">
-                <MiniStatCard title="Detections"   value={liveData.detections}        changeLabel="live count"    loading={isLoading} />
-                <MiniStatCard title="Crop Loss"    value={`${liveData.cropLoss}%`}    changeLabel="estimated"     loading={isLoading} />
-                <MiniStatCard title="Active Alerts" value={liveData.activeAlerts}     changeLabel="high severity" loading={isLoading} />
-                <MiniStatCard title="Healthy Crops" value={`${liveData.healthyCrops}%`} changeLabel="estimated"  loading={isLoading} />
+            {/* ── Stat Cards (above graph) ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14, padding: '28px 28px 0' }}>
+              <SparkStatCard title="Detections" value={liveData.detections} sparkData={sparks.detCounts} color="#ef4444" trendValue={detTrend.pct} trendUp={detTrend.up} trendLabel={trendLabel} loading={isLoading} />
+              <SparkStatCard title="Crop Loss" value={`${liveData.cropLoss}%`} sparkData={sparks.cropLossVals} color="#f97316" trendValue={cropTrend.pct} trendUp={cropTrend.up} trendLabel="estimated" loading={isLoading} />
+              <SparkStatCard title="Active Alerts" value={liveData.activeAlerts} sparkData={sparks.alertCounts} color="#3b82f6" trendValue={alertTrend.pct} trendUp={alertTrend.up} trendLabel="high severity" loading={reportLoading} />
+              <SparkStatCard title="Healthy Crops" value={`${liveData.healthyCrops}%`} sparkData={sparks.healthVals} color="#22c55e" trendValue={healthTrend.pct} trendUp={healthTrend.up} trendLabel="estimated" loading={isLoading} />
+            </div>
+
+            {/* ── Line Graph ── */}
+            {/* Increase bottom whitespace + add a divider so the charts feel separated */}
+            <div style={{ padding: '28px 28px 28px', borderBottom: '1px solid #26262608', marginBottom: 24 }}>
+              <DoodleGraph
+                  range={range} pest={pest}
+                  activeView={activeView} setActiveView={setActiveView}
+                  pestValue={pestValue} diseaseValue={diseaseValue}
+                  setPestValue={setPestValue} setDiseaseValue={setDiseaseValue}
+                  graphData={graphData}
+                  pestClasses={pestClasses}
+                  diseaseClasses={diseaseClasses}
+              />
+            </div>
+
+            {/* ── Pie & Bar Charts ── */}
+            {/* Add more breathing room above charts */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, padding: '0 28px 28px', marginTop: 8 }}>
+              {/* Pie Chart */}
+              <div style={{ background: 'white', border: '1px solid #26262610', borderRadius: 10, padding: '20px' }}>
+                <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: 'rgba(38,38,38,0.55)', marginBottom: 4 }}>Detection type breakdown</p>
+                <p style={{ margin: 0, fontSize: 15, fontWeight: 700, color: '#262626', marginBottom: 4 }}>Pest vs. disease share</p>
+                <p style={{ margin: 0, fontSize: 11, color: 'rgba(38,38,38,0.4)', marginBottom: 14 }}>Proportion by category and severity — informs treatment prioritization.</p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                  {[
+                    { label: 'Critical pest', color: '#D85A30' },
+                    { label: 'High pest', color: '#FAC775' },
+                    { label: 'Moderate pest', color: '#F09595' },
+                    { label: 'Critical disease', color: '#185FA5' },
+                    { label: 'High disease', color: '#85B7EB' },
+                    { label: 'Moderate disease', color: '#B5D4F4' },
+                    { label: 'Low (all)', color: '#3B6D11' },
+                  ].map(item => (
+                      <span key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'rgba(38,38,38,0.55)' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: item.color, flexShrink: 0 }} />
+                        {item.label}
+                    </span>
+                  ))}
+                </div>
+                <div style={{ position: 'relative', width: '100%', height: 220 }}>
+                  <canvas id="agriPieChart" />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
+                  <div style={{ background: '#26262604', borderRadius: 8, padding: '10px 12px' }}>
+                    <p style={{ margin: 0, fontSize: 11, color: 'rgba(38,38,38,0.5)' }}>Total pests</p>
+                    <p id="agriPestPct" style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#262626' }}>—</p>
+                  </div>
+                  <div style={{ background: '#26262604', borderRadius: 8, padding: '10px 12px' }}>
+                    <p style={{ margin: 0, fontSize: 11, color: 'rgba(38,38,38,0.5)' }}>Total diseases</p>
+                    <p id="agriDiseasePct" style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#262626' }}>—</p>
+                  </div>
+                </div>
               </div>
 
-              <div className="flex-1 min-w-0 px-5 lg:px-7 py-6">
-                <DoodleGraph
-                    range={range} pest={pest}
-                    activeView={activeView} setActiveView={setActiveView}
-                    pestValue={pestValue} diseaseValue={diseaseValue}
-                    setPestValue={setPestValue} setDiseaseValue={setDiseaseValue}
-                    graphData={graphData}
-                    pestClasses={pestClasses}
-                    diseaseClasses={diseaseClasses}
-                />
+              {/* Bar Chart */}
+              <div style={{ background: 'white', border: '1px solid #26262610', borderRadius: 10, padding: '20px' }}>
+                <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: 'rgba(38,38,38,0.55)', marginBottom: 4 }}>Field zone comparison</p>
+                <p style={{ margin: 0, fontSize: 15, fontWeight: 700, color: '#262626', marginBottom: 4 }}>Detections by field zone</p>
+                <p style={{ margin: 0, fontSize: 11, color: 'rgba(38,38,38,0.4)', marginBottom: 14 }}>Detection volume per zone — helps prioritize resource dispatch and mobile milling deployment.</p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                  {[
+                    { label: 'Critical', color: '#E24B4A' },
+                    { label: 'High', color: '#EF9F27' },
+                    { label: 'Moderate / Low', color: '#639922' },
+                  ].map(item => (
+                      <span key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'rgba(38,38,38,0.55)' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: item.color, flexShrink: 0 }} />
+                        {item.label}
+                    </span>
+                  ))}
+                </div>
+                <div style={{ position: 'relative', width: '100%', height: 280 }}>
+                  <canvas id="agriBarChart" />
+                </div>
               </div>
+
             </div>
+
           </div>
 
-          {/* Quick Actions */}
+          {/* ── Quick Actions ── */}
           <div>
-            <div className="mb-5">
-              <p className="text-lg font-bold text-slate-900 m-0 mb-1 tracking-tight">Quick Actions</p>
-              <p className="text-sm text-slate-400 m-0">Jump to common tasks</p>
+            <div style={{ marginBottom: 20 }}>
+              <p style={{ margin: 0, fontSize: 17, fontWeight: 700, color: '#262626', letterSpacing: '-0.01em', marginBottom: 5 }}>Quick Actions</p>
+              <p style={{ margin: 0, fontSize: 13, color: 'rgba(38,38,38,0.45)' }}>Jump to common tasks</p>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
               <ActionCard icon={<PlayCircle size={22} />} title="Start Field Monitoring" onClick={() => navigate('/field-monitoring')} />
@@ -1694,8 +1744,203 @@ export default function Dashboard() {
               <ActionCard icon={<MapPin size={22} />}     title="View Fields"            onClick={() => navigate('/fields')} />
             </div>
           </div>
-
         </main>
+
+        {helpOpen && <MetricsHelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />}
+        {uploadOpen && <UploadImageModal open={uploadOpen} onClose={() => setUploadOpen(false)} />}
+        {toast && <Toast key={toast.id} message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+        {/* ── Chart.js Initialization ── */}
+        <ChartInitializer detectionsList={liveData.detectionsList} />
       </div>
   )
 }
+
+// ─── Chart Initializer (mounts Chart.js after DOM is ready) ──────────────────
+
+function ChartInitializer({ detectionsList }) {
+  const pieRef = useRef(null)
+  const barRef = useRef(null)
+
+  useEffect(() => {
+    let script = document.getElementById('chartjs-cdn')
+    const init = () => {
+      const Chart = window.Chart
+      if (!Chart) return
+
+      // ── Derive data from live detections ──
+      const total = detectionsList.length
+      const pests = detectionsList.filter(d => d.type === 'Pest')
+      const diseases = detectionsList.filter(d => d.type === 'Disease')
+
+      const sevCount = (arr, sev) => arr.filter(d => d.severity === sev).length
+
+      const pestCrit = sevCount(pests, 'critical')
+      const pestHigh = sevCount(pests, 'high')
+      const pestMod  = sevCount(pests, 'moderate') + sevCount(pests, 'medium')
+      const disCrit  = sevCount(diseases, 'critical')
+      const disHigh  = sevCount(diseases, 'high')
+      const disMod   = sevCount(diseases, 'moderate') + sevCount(diseases, 'medium')
+      const lowAll   = sevCount(detectionsList, 'low')
+
+      const pieData = [pestCrit, pestHigh, pestMod, disCrit, disHigh, disMod, lowAll]
+      const pieTotal = pieData.reduce((a, b) => a + b, 0) || 1
+
+      // Update summary badges
+      const pestPctEl = document.getElementById('agriPestPct')
+      const disPctEl  = document.getElementById('agriDiseasePct')
+      if (pestPctEl) pestPctEl.textContent = `${Math.round((pests.length / (total || 1)) * 100)}%`
+      if (disPctEl)  disPctEl.textContent  = `${Math.round((diseases.length / (total || 1)) * 100)}%`
+
+      // ── Pie Chart ──
+      const pieCanvas = document.getElementById('agriPieChart')
+      if (pieCanvas) {
+        if (!pieRef.current) {
+          pieRef.current = new Chart(pieCanvas, {
+            type: 'doughnut',
+            data: {
+              labels: ['Critical pest','High pest','Moderate pest','Critical disease','High disease','Moderate disease','Low (all)'],
+              datasets: [{
+                data: pieTotal > 0 ? pieData : [1,1,1,1,1,1,1],
+                backgroundColor: ['#D85A30','#FAC775','#F09595','#185FA5','#85B7EB','#B5D4F4','#3B6D11'],
+                borderWidth: 2,
+                borderColor: 'rgba(255,255,255,0.8)',
+                hoverOffset: 6,
+              }],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              cutout: '60%',
+              animation: false,
+              transitions: {
+                active: { animation: { duration: 0 } },
+                resize: { animation: { duration: 0 } },
+                show: { animations: { colors: { duration: 0 }, numbers: { duration: 0 } } },
+                hide: { animations: { colors: { duration: 0 }, numbers: { duration: 0 } } },
+              },
+              plugins: {
+                legend: { display: false },
+                tooltip: {
+                  callbacks: {
+                    label: (ctx) => {
+                      const pct = Math.round((ctx.raw / pieTotal) * 100)
+                      return ` ${ctx.label}: ${ctx.raw} (${pct}%)`
+                    },
+                  },
+                },
+              },
+            },
+          })
+        } else {
+          pieRef.current.data.datasets[0].data = pieTotal > 0 ? pieData : [1,1,1,1,1,1,1]
+          pieRef.current.update('none')
+        }
+      }
+
+      // ── Bar Chart — derive zones from live detections ──
+      const locationMap = {}
+      detectionsList.forEach(d => {
+        const loc = d.location || 'Unknown'
+        if (!locationMap[loc]) locationMap[loc] = { critical: 0, high: 0, modLow: 0 }
+        if (d.severity === 'critical') locationMap[loc].critical++
+        else if (d.severity === 'high') locationMap[loc].high++
+        else locationMap[loc].modLow++
+      })
+
+      let zones = Object.entries(locationMap)
+          .map(([name, counts]) => ({ name, ...counts, total: counts.critical + counts.high + counts.modLow }))
+          .sort((a, b) => b.total - a.total)
+          .slice(0, 6)
+
+      // Fallback sample data if no detections yet
+      if (zones.length === 0) {
+        zones = [
+          { name: 'Zone A', critical: 14, high: 19, modLow: 14 },
+          { name: 'Zone B', critical: 11, high: 15, modLow: 12 },
+          { name: 'Zone C', critical:  8, high: 12, modLow: 11 },
+          { name: 'Zone D', critical:  5, high:  8, modLow: 11 },
+          { name: 'Zone E', critical:  2, high:  5, modLow: 10 },
+        ]
+      }
+
+      const barCanvas = document.getElementById('agriBarChart')
+      if (barCanvas) {
+        const labels = zones.map(z => z.name)
+        const crit   = zones.map(z => z.critical)
+        const high   = zones.map(z => z.high)
+        const modLow = zones.map(z => z.modLow)
+
+        if (!barRef.current) {
+          barRef.current = new Chart(barCanvas, {
+            type: 'bar',
+            data: {
+              labels,
+              datasets: [
+                { label: 'Critical',       data: crit,   backgroundColor: '#E24B4A', borderRadius: 0 },
+                { label: 'High',           data: high,   backgroundColor: '#EF9F27', borderRadius: 0 },
+                { label: 'Moderate / Low', data: modLow, backgroundColor: '#639922', borderRadius: 4 },
+              ],
+            },
+            options: {
+              indexAxis: 'y',
+              responsive: true,
+              maintainAspectRatio: false,
+              animation: false,
+              transitions: {
+                active: { animation: { duration: 0 } },
+                resize: { animation: { duration: 0 } },
+                show: { animations: { colors: { duration: 0 }, numbers: { duration: 0 } } },
+                hide: { animations: { colors: { duration: 0 }, numbers: { duration: 0 } } },
+              },
+              scales: {
+                x: {
+                  stacked: true,
+                  ticks: { font: { size: 11 }, color: 'rgba(38,38,38,0.4)' },
+                  grid: { color: 'rgba(38,38,38,0.05)' },
+                  title: { display: true, text: 'Number of detections', font: { size: 10 }, color: 'rgba(38,38,38,0.4)' },
+                },
+                y: {
+                  stacked: true,
+                  ticks: { font: { size: 11 }, color: 'rgba(38,38,38,0.55)' },
+                  grid: { display: false },
+                },
+              },
+              plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: (ctx) => ` ${ctx.dataset.label}: ${ctx.raw} detections` } },
+              },
+            },
+          })
+        } else {
+          barRef.current.data.labels = labels
+          barRef.current.data.datasets[0].data = crit
+          barRef.current.data.datasets[1].data = high
+          barRef.current.data.datasets[2].data = modLow
+          barRef.current.update('none')
+        }
+      }
+    }
+
+    if (!script) {
+      script = document.createElement('script')
+      script.id = 'chartjs-cdn'
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js'
+      script.onload = init
+      document.head.appendChild(script)
+    } else if (window.Chart) {
+      init()
+    } else {
+      script.addEventListener('load', init)
+    }
+
+    return () => {
+      // optional cleanup on unmount (prevents leaks if Dashboard unmounts)
+      if (pieRef.current) { pieRef.current.destroy(); pieRef.current = null }
+      if (barRef.current) { barRef.current.destroy(); barRef.current = null }
+    }
+  }, [detectionsList])
+
+  return null
+}
+

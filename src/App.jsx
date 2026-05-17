@@ -2,6 +2,8 @@
 import { useState } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./components/context/AuthContext";
+import { MonitoringProvider } from "./components/context/MonitoringContext";
+import FloatingMonitor from "./components/FloatingMonitor";
 import Sidebar from "./components/Sidebar";
 import Navbar from "./components/Navbar";
 import Dashboard from "./components/Dashboard";
@@ -10,6 +12,8 @@ import Detection from "./components/Detection";
 import AlarmLog from "./components/AlarmLog";
 import Fields from "./components/Fields";
 import Settings from "./components/Settings";
+import GeoSurveillance from "./components/GeoSurveillance";
+import Reports from "./components/Reports";          // ← NEW
 import Register from "./components/Register";
 import Login from "./components/Login";
 import "./App.css";
@@ -18,6 +22,7 @@ const MainLayout = ({ children, isCollapsed, onToggle }) => (
     <div className="bg-white min-h-screen">
         <Sidebar isCollapsed={isCollapsed} onToggle={onToggle} />
         <Navbar  isCollapsed={isCollapsed} onToggle={onToggle} />
+        <FloatingMonitor />
         <main className={`pt-14 transition-all duration-300 ease-in-out ${isCollapsed ? "ml-[72px]" : "ml-60"}`}>
             {children}
         </main>
@@ -51,7 +56,9 @@ function AppRoutes() {
             <Route path="/detection"        element={withLayout(Detection)} />
             <Route path="/alarm-log"        element={withLayout(AlarmLog)} />
             <Route path="/fields"           element={withLayout(Fields)} />
+            <Route path="/geo-surveillance" element={withLayout(GeoSurveillance)} />
             <Route path="/settings"         element={withLayout(Settings)} />
+            <Route path="/reports"          element={withLayout(Reports)} />   {/* ← NEW */}
 
             <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
@@ -62,7 +69,9 @@ function App() {
     return (
         <Router>
             <AuthProvider>
-                <AppRoutes />
+                <MonitoringProvider>
+                    <AppRoutes />
+                </MonitoringProvider>
             </AuthProvider>
         </Router>
     );

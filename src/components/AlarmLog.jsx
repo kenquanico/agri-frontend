@@ -2,8 +2,6 @@ import { useState, useEffect, useCallback } from 'react'
 import { AlertTriangle, X, Leaf, Bug, MapPin, Clock, Activity, ChevronRight, Thermometer, Droplets, Wind } from 'lucide-react'
 import api from '../api/api'
 
-const SHARED_DETECTIONS_KEY = 'agriSharedDetections'
-
 const severityConfig = {
   high:   { label: 'High',   classes: 'bg-gray-900 text-white border-gray-800' },
   medium: { label: 'Medium', classes: 'bg-gray-200 text-gray-700 border-gray-300' },
@@ -15,7 +13,7 @@ const typeConfig = {
   Pest:    { classes: 'bg-amber-50 text-amber-700 border-amber-200' },
 }
 
-const confidenceColor = c => c >= 90 ? 'text-gray-900' : c >= 75 ? 'text-gray-600' : 'text-gray-400'
+const confidenceColor = c => c >= 90 ? 'text-[#262626]' : c >= 75 ? 'text-[rgba(38,38,38,0.7)]' : 'text-[rgba(38,38,38,0.45)]'
 
 const filterBtns = [
   { key: 'all', label: 'All' },
@@ -44,33 +42,17 @@ const normalizeType = (value) => {
   return deriveType({ type: value })
 }
 
-const normalizeRecord = (raw, index) => {
-  const type = normalizeType(raw.type)
-  const confidence = raw.confidence != null
+const normalizeRecord = (raw, index) => ({
+  id:         raw.id ?? `record-${index}`,
+  timestamp:  raw.timestamp ?? raw.created_at ?? '—',
+  type:       raw.type ?? 'Disease',
+  name:       raw.name ?? raw.class ?? 'Unknown',
+  confidence: raw.confidence != null
       ? (raw.confidence <= 1 ? Math.round(raw.confidence * 100) : Math.round(raw.confidence))
-      : 0
-  const timestamp = raw.timestamp ?? raw.createdAt ?? raw.detected_at ?? raw.detectedAt ?? '—'
-
-  return {
-    id: raw.id ?? raw._id ?? `${timestamp}-${index}`,
-    timestamp,
-    type,
-    name: raw.class ?? raw.label ?? raw.name ?? 'Unknown',
-    confidence,
-    location: raw.location ?? raw.field ?? raw.fieldName ?? (raw.fieldId ? `Field ${raw.fieldId}` : '—'),
-    severity: deriveSeverity({ ...raw, confidence: raw.confidence ?? confidence / 100 }),
-  }
-}
-
-const loadSharedDetections = () => {
-  try {
-    const raw = JSON.parse(localStorage.getItem(SHARED_DETECTIONS_KEY) || '[]')
-    return Array.isArray(raw) ? raw : []
-  } catch {
-    return []
-  }
-}
-
+      : 0,
+  location: raw.location ?? (raw.field_id ? `Field ${raw.field_id}` : '—'),
+  severity: String(raw.severity ?? 'low').toLowerCase(),
+})
 // ─── Static enrichment data ────────────────────────────────────────────────
 
 const staticDetails = {
@@ -230,12 +212,12 @@ function DetailsModal({ detection, onClose, onTreatment }) {
               {/* Left column */}
               <div className="px-10 py-8 space-y-8">
                 <div>
-                  <p className="text-xs font-semibold tracking-widest text-gray-400 uppercase mb-3">Overview</p>
+                  <p className="text-xs font-semibold tracking-widest text-gray-400  mb-3">Overview</p>
                   <p className="text-sm text-gray-600 leading-relaxed">{details.description}</p>
                 </div>
 
                 <div>
-                  <p className="text-xs font-semibold tracking-widest text-gray-400 uppercase mb-4">Observed symptoms</p>
+                  <p className="text-xs font-semibold tracking-widest text-gray-400  mb-4">Observed symptoms</p>
                   <ul className="space-y-3">
                     {details.symptoms.map((s, i) => (
                         <li key={i} className="flex items-start gap-3">
@@ -250,12 +232,12 @@ function DetailsModal({ detection, onClose, onTreatment }) {
               {/* Right column */}
               <div className="px-10 py-8 space-y-8">
                 <div>
-                  <p className="text-xs font-semibold tracking-widest text-gray-400 uppercase mb-4">Field info</p>
+                  <p className="text-xs font-semibold tracking-widest text-gray-400 mb-4">Field info</p>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="bg-gray-50 rounded-2xl p-4">
                       <div className="flex items-center gap-1.5 mb-2">
                         <MapPin size={12} className="text-gray-400" />
-                        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Location</p>
+                        <p className="text-xs font-semibold text-gray-40 tracking-wider">Location</p>
                       </div>
                       <p className="text-sm font-semibold text-gray-800">{detection.location}</p>
                       <p className="text-xs text-gray-400 mt-1">{details.affectedArea} affected</p>
@@ -263,7 +245,7 @@ function DetailsModal({ detection, onClose, onTreatment }) {
                     <div className="bg-gray-50 rounded-2xl p-4">
                       <div className="flex items-center gap-1.5 mb-2">
                         <Clock size={12} className="text-gray-400" />
-                        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Timeline</p>
+                        <p className="text-xs font-semibold text-gray-400  tracking-wider">Timeline</p>
                       </div>
                       <p className="text-sm font-semibold text-gray-800">{details.firstDetected}</p>
                       <p className="text-xs text-gray-400 mt-1">Spread: {details.spread}</p>
@@ -335,7 +317,7 @@ function TreatmentModal({ detection, onClose }) {
   return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm" onClick={onClose}>
         <div
-            className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
             onClick={e => e.stopPropagation()}
         >
           {/* Header */}
@@ -451,53 +433,38 @@ export default function AlarmLog() {
   const [detailsTarget, setDetailsTarget] = useState(null)
   const [treatmentTarget, setTreatmentTarget] = useState(null)
 
+  // ── Track which endpoints 404 so we stop calling them ──────────────────────
+  const apiNotFound = { current: {} }
   const fetchAlarms = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const shared = loadSharedDetections().map((item, idx) => normalizeRecord(item, idx))
-
-      let apiRows = []
-      try {
-        const res = await api.get('/api/alarms')
-        const raw = res.data?.data ?? res.data ?? []
-        apiRows = Array.isArray(raw) ? raw.map(normalizeRecord) : []
-      } catch (err) {
-        console.error('Alarm fetch failed:', err.response?.status, err.response?.data ?? err.message)
-        try {
-          const res = await api.get('/api/detections')
-          const raw = res.data?.data ?? res.data ?? []
-          apiRows = Array.isArray(raw) ? raw.map(normalizeRecord) : []
-        } catch (err2) {
-          console.error('Detections fetch also failed:', err2.response?.status, err2.response?.data ?? err2.message)
-        }
-      }
-
-      const merged = [...shared, ...apiRows]
-      const deduped = Array.from(new Map(merged.map(r => [String(r.id), r])).values())
-      deduped.sort((a, b) => {
-        const ta = new Date(a.timestamp).getTime() || 0
-        const tb = new Date(b.timestamp).getTime() || 0
-        return tb - ta
-      })
-
-      setDetectionLog(deduped)
-      if (deduped.length === 0) {
+      const res = await api.get('/api/detections', { validateStatus: () => true }).catch(() => null)
+      if (res?.status === 200) {
+        const raw = res.data?.data ?? []
+        const records = Array.isArray(raw) ? raw.map((r, i) => normalizeRecord(r, i)) : []
+        records.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+        setDetectionLog(records)
+        if (records.length === 0) setError('No detection records found. Make sure the API server is running and field monitoring has been used.')
+      } else {
         setError('Could not load detection records. Make sure the API server is running.')
       }
       setLastUpdated(new Date())
+    } catch (err) {
+      console.error('fetchAlarms error:', err)
+      setError('Could not load detection records. Make sure the API server is running.')
     } finally {
       setLoading(false)
     }
   }, [])
 
+
+  // Initial fetch + polling every 5 s (same cadence as Dashboard & FieldMonitoring)
   useEffect(() => { fetchAlarms() }, [fetchAlarms])
 
   useEffect(() => {
     const interval = setInterval(fetchAlarms, 5000)
-    const onStorage = (e) => { if (e.key === SHARED_DETECTIONS_KEY) fetchAlarms() }
-    window.addEventListener('storage', onStorage)
-    return () => { clearInterval(interval); window.removeEventListener('storage', onStorage) }
+    return () => clearInterval(interval)
   }, [fetchAlarms])
 
   const parseTimestamp = (value) => {
@@ -545,22 +512,23 @@ export default function AlarmLog() {
   ]
 
   return (
-      <div className="min-h-screen bg-gray-50/60 p-6 md:p-10">
-        <div className="max-w-6xl mx-auto space-y-6">
+    <div className="min-h-screen bg-white">
+      <main className="max-w-screen-2xl mx-auto px-4 sm:px-4 lg:px-8 xl:px-12 py-2 lg:py-8 flex flex-col gap-10 font-sans text-[#262626]">
+        <div className="max-w-6xl w-full space-y-8">
 
-          {/* Header */}
-          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+          {/* Header (Dashboard-like; match divider + ink) */}
+          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
             <div>
               <p className="text-xs font-semibold tracking-widest text-green-600 uppercase mb-1">Monitoring</p>
-              <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Alarm Log</h1>
-              <p className="text-sm text-gray-400 mt-0.5">Detected pests and diseases from field monitoring</p>
+              <h1 className="text-3xl font-bold text-[#262626] tracking-tight">Alarm Log</h1>
+              <p className="text-sm text-[rgba(38,38,38,0.45)] mt-0.5">Detected pests and diseases from field monitoring</p>
             </div>
             <div className="flex items-center gap-2">
-              {lastUpdated && <p className="text-xs text-gray-400">Updated {lastUpdated.toLocaleTimeString()}</p>}
+              {lastUpdated && <p className="text-xs text-[rgba(38,38,38,0.4)]">Updated {lastUpdated.toLocaleTimeString()}</p>}
               <button
-                  onClick={fetchAlarms}
-                  disabled={loading}
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm"
+                onClick={fetchAlarms}
+                disabled={loading}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl bg-white border border-[#26262610] text-[rgba(38,38,38,0.7)] hover:bg-[#26262604] hover:border-[#26262615] disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
                 <svg className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -569,6 +537,9 @@ export default function AlarmLog() {
               </button>
             </div>
           </div>
+
+          {/* Divider (Dashboard color) */}
+          <div className="h-px w-full bg-[#26262608]" />
 
           {/* Error */}
           {error && (
@@ -584,14 +555,14 @@ export default function AlarmLog() {
           {/* Stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {stats.map(({ label, value }) => (
-                <div key={label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">{label}</p>
-                  {loading ? (
-                      <div className="h-10 w-12 bg-gray-100 rounded-lg animate-pulse" />
-                  ) : (
-                      <p className="text-4xl font-bold tracking-tight text-gray-900">{value}</p>
-                  )}
-                </div>
+              <div key={label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">{label}</p>
+                {loading ? (
+                  <div className="h-10 w-12 bg-gray-100 rounded-lg animate-pulse" />
+                ) : (
+                  <p className="text-4xl font-bold tracking-tight text-[#262626]">{value}</p>
+                )}
+              </div>
             ))}
           </div>
 
@@ -644,6 +615,87 @@ export default function AlarmLog() {
               </div>
           )}
 
+          {/* Desktop Table — FLAT (no card). Divider-only */}
+          {!loading && (
+            <div className="hidden lg:block">
+              <div className="flex items-center justify-between py-4">
+                <h2 className="text-sm font-semibold text-[#262626]">Detection Records</h2>
+                <span className="text-xs text-[rgba(38,38,38,0.4)]">
+                  {filteredLog.length} record{filteredLog.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+
+              <div className="h-px w-full bg-[#26262608]" />
+
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-[#26262610]">
+                      {['Timestamp', 'Type', 'Detection', 'Location', 'Confidence', 'Severity', ''].map((col, i) => (
+                        <th
+                          key={i}
+                          className="px-2 py-3 text-left text-xs font-semibold text-[rgba(38,38,38,0.45)] uppercase tracking-wider"
+                        >
+                          {col}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+
+                  <tbody className="divide-y divide-[#26262610]">
+                    {filteredLog.map(d => (
+                      <tr key={d.id} className="group hover:bg-[#26262604] transition-colors">
+                        <td className="px-2 py-4 text-sm text-[rgba(38,38,38,0.6)] whitespace-nowrap">{d.timestamp}</td>
+                        <td className="px-2 py-4">
+                          <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold border ${(typeConfig[d.type] ?? typeConfig.Disease).classes}`}>
+                            {d.type}
+                          </span>
+                        </td>
+                        <td className="px-2 py-4 text-sm font-semibold text-[#262626]">{d.name}</td>
+                        <td className="px-2 py-4 text-sm text-[rgba(38,38,38,0.6)]">{d.location}</td>
+                        <td className="px-2 py-4 text-sm font-bold whitespace-nowrap">
+                          <span className={confidenceColor(d.confidence)}>{d.confidence}%</span>
+                        </td>
+                        <td className="px-2 py-4">
+                          <span className={`inline-flex px-2.5 py-1 rounded-xl text-xs font-semibold border ${(severityConfig[d.severity] ?? severityConfig.low).classes}`}>
+                            {(severityConfig[d.severity] ?? severityConfig.low).label}
+                          </span>
+                        </td>
+                        <td className="px-2 py-4">
+                          <div className="flex items-center justify-end gap-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => setDetailsTarget(d)}
+                              className="text-xs font-semibold text-[rgba(38,38,38,0.6)] hover:text-[#262626]"
+                            >
+                              Details
+                            </button>
+                            <button
+                              onClick={() => setTreatmentTarget(d)}
+                              className="text-xs font-semibold text-green-600 hover:text-green-800"
+                            >
+                              Treatment
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="h-px w-full bg-[#26262608]" />
+
+              {filteredLog.length === 0 && !loading && (
+                <div className="py-16 text-center">
+                  <AlertTriangle size={28} className="text-[#26262620] mx-auto mb-3" />
+                  <p className="text-sm font-medium text-[rgba(38,38,38,0.45)]">
+                    {error ? 'Failed to load detections' : 'No detections match this filter'}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Mobile Cards */}
           {!loading && (
               <div className="space-y-3 lg:hidden">
@@ -689,73 +741,6 @@ export default function AlarmLog() {
               </div>
           )}
 
-          {/* Desktop Table */}
-          {!loading && (
-              <div className="hidden lg:block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="text-sm font-semibold text-gray-700">Detection Records</h2>
-                  <span className="text-xs text-gray-400 bg-gray-100 px-2.5 py-1 rounded-full font-medium">
-                {filteredLog.length} record{filteredLog.length !== 1 ? 's' : ''}
-              </span>
-                </div>
-                <table className="w-full">
-                  <thead>
-                  <tr>
-                    {['Timestamp', 'Type', 'Detection', 'Location', 'Confidence', 'Severity', ''].map((col, i) => (
-                        <th key={i} className="px-6 py-3.5 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">{col}</th>
-                    ))}
-                  </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                  {filteredLog.map(d => (
-                      <tr key={d.id} className="group hover:bg-gray-50/70 transition-colors">
-                        <td className="px-6 py-4 text-sm text-gray-500 whitespace-nowrap">{d.timestamp}</td>
-                        <td className="px-6 py-4">
-                      <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold border ${(typeConfig[d.type] ?? typeConfig.Disease).classes}`}>
-                        {d.type}
-                      </span>
-                        </td>
-                        <td className="px-6 py-4 text-sm font-semibold text-gray-900">{d.name}</td>
-                        <td className="px-6 py-4 text-sm text-gray-500">{d.location}</td>
-                        <td className="px-6 py-4 text-sm font-bold whitespace-nowrap">
-                          <span className={confidenceColor(d.confidence)}>{d.confidence}%</span>
-                        </td>
-                        <td className="px-6 py-4">
-                      <span className={`inline-flex px-2.5 py-1 rounded-xl text-xs font-semibold border ${(severityConfig[d.severity] ?? severityConfig.low).classes}`}>
-                        {(severityConfig[d.severity] ?? severityConfig.low).label}
-                      </span>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                                onClick={() => setDetailsTarget(d)}
-                                className="text-xs font-semibold text-gray-500 hover:text-gray-800"
-                            >
-                              Details
-                            </button>
-                            <button
-                                onClick={() => setTreatmentTarget(d)}
-                                className="text-xs font-semibold text-green-600 hover:text-green-800"
-                            >
-                              Treatment
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                  ))}
-                  </tbody>
-                </table>
-
-                {filteredLog.length === 0 && !loading && (
-                    <div className="py-16 text-center">
-                      <AlertTriangle size={28} className="text-gray-200 mx-auto mb-3" />
-                      <p className="text-sm font-medium text-gray-400">
-                        {error ? 'Failed to load detections' : 'No detections match this filter'}
-                      </p>
-                    </div>
-                )}
-              </div>
-          )}
         </div>
 
         {/* Modals */}
@@ -772,6 +757,8 @@ export default function AlarmLog() {
                 onClose={() => setTreatmentTarget(null)}
             />
         )}
-      </div>
+      </main>
+    </div>
   )
 }
+

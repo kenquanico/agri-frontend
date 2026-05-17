@@ -1,0 +1,36 @@
+APP
+
+SETTINGS
+
+A centralized configuration panel for managing AI detection settings, camera devices, notifications, classifications, and model uploads. It allows administrators to customize detection thresholds, configure IP cameras or drone streams, manage pest and disease classifications, and upload YOLO models for real time agricultural surveillance.
+
+DASHBOARD
+    
+AI-powered agricultural surveillance dashboard with real-time pest and disease detection, field analytics, automated PDF reporting, severity monitoring, geospatial field tracking, and interactive visualization tools built with React, Chart.js, and YOLOv8 integration.
+
+ALARM LOG
+
+Alarm Log settings and management page for monitoring detected rice pests and diseases. Includes real time detection records, severity tracking, confidence monitoring, filtering tools, detailed field analysis, and treatment recommendations for rapid agricultural response.
+
+FIELD MONITORING
+
+ Field Monitoring dashboard for live camera and drone feeds with real-time YOLO detections. It handles device selection, field selection, fullscreen monitoring, and overlays bounding boxes on video or image streams. It also logs detections, tracks confidence and counts, and supports WebRTC and MJPEG streams with a canvas-based renderer.
+
+
+DETECTION
+
+Image detection UI for uploading crop images and simulating pest analysis. It supports drag and drop upload, shows preview, runs a mock detection process, and displays pest type, confidence, severity, and treatment recommendations with download and clear options.
+
+FIELDS
+
+React Fields management dashboard for agricultural monitoring system with full CRUD functionality. Handles field creation, editing, and deletion with API integration. Supports farmer assignment per field with modal management. Includes responsive table and card layout, real-time UI updates, and monitoring status tracking. Provides clean UI for managing crop fields, area data, and associated farmers.
+
+REPORTS
+
+React Reports management dashboard for agricultural monitoring system with full report lifecycle control. Handles surveillance report generation, PDF export using jsPDF, and local storage history management. Integrates live detection data for real-time report creation and supports filtering, search, and status tracking. Includes preview, delete, and re-download functionality with modal-based interactions. Provides statistical overview cards, report table interface, and severity-based analytics for pest and disease surveillance outputs.
+
+GEO SURVEILLANCE
+
+GeoSurveillance dashboard for agricultural monitoring system with real-time detection data visualization. Includes Google Maps heatmap and marker view, severity-based filtering, search, and type classification for pest and disease detections. Supports live API integration, automatic refresh, and geotagged record processing. Provides statistical overview cards, sortable detection table, CSV export, pagination, and detailed map tooltips for field-level surveillance analysis.
+
+

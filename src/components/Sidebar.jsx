@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LogOut, Settings as SettingsIcon, X } from "lucide-react";
+import { LogOut, Settings as SettingsIcon, FileText, X } from "lucide-react";
 import Logo from "../assets/AV-logo.PNG";
 import Fields from "../assets/fields.svg";
 import Dashboard from "../assets/dashboard.svg";
@@ -19,11 +19,13 @@ export default function Sidebar({ isCollapsed, onToggle }) {
   };
 
   const navItems = [
-    { to: "/dashboard",        icon: Dashboard,       label: "Dashboard" },
-    { to: "/field-monitoring", icon: FieldMonitoring, label: "Field Monitoring" },
-    { to: "/detection",        icon: Detection,        label: "Detection" },
-    { to: "/alarm-log",        icon: AlarmLog,         label: "Alarm Log" },
-    { to: "/fields",           icon: Fields,           label: "Fields" },
+    { to: "/dashboard",        icon: Dashboard,       label: "Dashboard",        type: "img" },
+    { to: "/field-monitoring", icon: FieldMonitoring, label: "Field Monitoring",  type: "img" },
+    { to: "/geo-surveillance", icon: FieldMonitoring, label: "Geo Surveillance",  type: "img" },
+    { to: "/detection",        icon: Detection,        label: "Detection",         type: "img" },
+    { to: "/alarm-log",        icon: AlarmLog,         label: "Alarm Log",         type: "img" },
+    { to: "/fields",           icon: Fields,           label: "Fields",            type: "img" },
+    { to: "/reports",          icon: null,             label: "Reports",           type: "lucide" },
   ];
 
   return (
@@ -33,22 +35,25 @@ export default function Sidebar({ isCollapsed, onToggle }) {
                 isCollapsed ? "w-[72px]" : "w-60"
             }`}
         >
-          {/* Logo Row — no toggle button, that lives in Navbar now */}
+          {/* Logo Row */}
           <div className="flex items-center h-14 px-3 border-b border-gray-100">
             <div className="flex items-center gap-3 px-3">
               <div className="flex items-center justify-center w-5 flex-shrink-0">
                 <img src={Logo} className="h-[22px] w-[22px] object-contain" alt="Logo" />
               </div>
-              <span className={`whitespace-nowrap overflow-hidden transition-all duration-300 font-bold text-gray-800 text-sm ${isCollapsed ? "w-0 opacity-0" : "w-auto opacity-100"}`}>
+              <span
+                  className={`whitespace-nowrap overflow-hidden transition-all duration-300 font-bold text-gray-800 text-sm ${
+                      isCollapsed ? "w-0 opacity-0" : "w-auto opacity-100"
+                  }`}
+              >
               AgriVision
             </span>
             </div>
           </div>
 
-
           {/* Nav */}
           <nav className="flex-1 px-3 py-4 space-y-0.5">
-            {navItems.map(({ to, icon: Icon, label }) => (
+            {navItems.map(({ to, icon: Icon, label, type }) => (
                 <NavLink
                     key={to}
                     to={to}
@@ -64,13 +69,31 @@ export default function Sidebar({ isCollapsed, onToggle }) {
                   {({ isActive }) => (
                       <>
                         <div className="flex items-center justify-center w-5 flex-shrink-0">
-                          <img
-                              src={Icon}
-                              className={`h-[22px] w-[22px] transition-opacity ${isActive ? "opacity-100" : "opacity-60 group-hover:opacity-80"}`}
-                              alt={label}
-                          />
+                          {type === "lucide" ? (
+                              /* Reports uses Lucide FileText so no SVG asset needed */
+                              <FileText
+                                  size={20}
+                                  className={`transition-opacity ${
+                                      isActive
+                                          ? "opacity-100 text-green-700"
+                                          : "opacity-60 group-hover:opacity-80"
+                                  }`}
+                              />
+                          ) : (
+                              <img
+                                  src={Icon}
+                                  className={`h-[22px] w-[22px] transition-opacity ${
+                                      isActive ? "opacity-100" : "opacity-60 group-hover:opacity-80"
+                                  }`}
+                                  alt={label}
+                              />
+                          )}
                         </div>
-                        <span className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${isCollapsed ? "w-0 opacity-0" : "w-auto opacity-100"}`}>
+                        <span
+                            className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${
+                                isCollapsed ? "w-0 opacity-0" : "w-auto opacity-100"
+                            }`}
+                        >
                     {label}
                   </span>
                         {isActive && !isCollapsed && (
@@ -87,7 +110,9 @@ export default function Sidebar({ isCollapsed, onToggle }) {
                 title={isCollapsed ? "Settings" : ""}
                 className={({ isActive }) =>
                     `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors group ${
-                        isActive ? "bg-green-50 text-green-700" : "text-gray-500 hover:bg-gray-50 hover:text-gray-800"
+                        isActive
+                            ? "bg-green-50 text-green-700"
+                            : "text-gray-500 hover:bg-gray-50 hover:text-gray-800"
                     }`
                 }
             >
@@ -96,10 +121,16 @@ export default function Sidebar({ isCollapsed, onToggle }) {
                     <div className="flex items-center justify-center w-5 flex-shrink-0">
                       <SettingsIcon
                           size={22}
-                          className={`transition-opacity ${isActive ? "opacity-100 text-green-700" : "opacity-60 group-hover:opacity-80"}`}
+                          className={`transition-opacity ${
+                              isActive ? "opacity-100 text-green-700" : "opacity-60 group-hover:opacity-80"
+                          }`}
                       />
                     </div>
-                    <span className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${isCollapsed ? "w-0 opacity-0" : "w-auto opacity-100"}`}>
+                    <span
+                        className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${
+                            isCollapsed ? "w-0 opacity-0" : "w-auto opacity-100"
+                        }`}
+                    >
                   Settings
                 </span>
                     {isActive && !isCollapsed && (
@@ -120,7 +151,11 @@ export default function Sidebar({ isCollapsed, onToggle }) {
               <div className="flex items-center justify-center w-5 flex-shrink-0">
                 <LogOut size={18} />
               </div>
-              <span className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${isCollapsed ? "w-0 opacity-0" : "w-auto opacity-100"}`}>
+              <span
+                  className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${
+                      isCollapsed ? "w-0 opacity-0" : "w-auto opacity-100"
+                  }`}
+              >
               Logout
             </span>
             </button>
@@ -141,7 +176,9 @@ export default function Sidebar({ isCollapsed, onToggle }) {
                   </button>
                 </div>
                 <div className="px-6 py-5">
-                  <p className="text-sm text-gray-500 mb-6">Are you sure you want to sign out of your account?</p>
+                  <p className="text-sm text-gray-500 mb-6">
+                    Are you sure you want to sign out of your account?
+                  </p>
                   <div className="flex gap-2">
                     <button
                         onClick={handleLogout}
